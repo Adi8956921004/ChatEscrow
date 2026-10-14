@@ -71,12 +71,18 @@ public class ProjectService {
                                       String description, String contractVersionId) {
         String resolved = resolveProjectId(projectId);
         getProject(resolved); // validate exists
+        java.time.LocalDate parsedDueDate = null;
+        if (dueDate != null && !dueDate.isBlank()) {
+            try {
+                parsedDueDate = java.time.LocalDate.parse(dueDate.trim());
+            } catch (Exception ignored) {}
+        }
         Milestone m = Milestone.builder()
                 .projectId(resolved)
                 .contractVersionId(contractVersionId)
                 .title(title)
                 .amount(amount)
-                .dueDate(dueDate != null ? java.time.LocalDate.parse(dueDate) : null)
+                .dueDate(parsedDueDate)
                 .deliverables(deliverables)
                 .acceptanceCriteria(criteria)
                 .description(description)

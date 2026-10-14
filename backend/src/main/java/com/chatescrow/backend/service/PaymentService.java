@@ -168,6 +168,19 @@ public class PaymentService {
         return payment;
     }
 
+    @Transactional
+    public Payment refundPayment(String paymentId, String reason) {
+        Payment payment = getPayment(paymentId);
+        payment.setStatus(Payment.PaymentStatus.CANCELLED);
+        payment.setUpdatedAt(Instant.now());
+        payment = paymentRepo.save(payment);
+
+        projectService.audit(payment.getProjectId(), "client", "Client",
+                "ESCROW_REFUND_PROCESSED", "Payment", payment.getId(),
+                "{\"amount\":" + payment.getAmount() + ",\"reason\":\"" + (reason != null ? reason.replace("\"", "'") : "Mutual resolution refund") + "\"}");
+        return payment;
+    }
+
     public List<Payment> getProjectPayments(String projectId) {
         String resolvedProjectId = projectService.resolveProjectId(projectId);
         return paymentRepo.findByProjectId(resolvedProjectId);
