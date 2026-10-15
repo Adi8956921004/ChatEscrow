@@ -134,6 +134,13 @@ public class ProjectController {
         return ResponseEntity.ok(paymentService.recordDemoPayment(projectId, milestoneId, amount, currency));
     }
 
+    @PostMapping("/payments/{paymentId}/refund")
+    public ResponseEntity<Payment> refundPayment(@PathVariable String paymentId,
+                                                @RequestBody(required = false) Map<String, String> body) {
+        String reason = body != null ? body.get("reason") : "Refund requested";
+        return ResponseEntity.ok(paymentService.refundPayment(paymentId, reason));
+    }
+
     @GetMapping("/projects/{projectId}/payments")
     public List<Payment> getProjectPayments(@PathVariable String projectId) {
         return paymentService.getProjectPayments(projectId);

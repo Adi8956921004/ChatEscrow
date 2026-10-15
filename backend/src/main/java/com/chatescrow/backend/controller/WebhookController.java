@@ -11,6 +11,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -85,5 +86,28 @@ public class WebhookController {
                 "verificationStatus", status.name(),
                 "eventType", eventType
         ));
+    }
+
+    @GetMapping("/events")
+    public List<WebhookEvent> listEvents() {
+        return webhookRepo.findAll();
+    }
+
+    @PostMapping("/simulate")
+    public ResponseEntity<WebhookEvent> simulateWebhook(@RequestBody Map<String, String> body) {
+        String eventType = body.getOrDefault("eventType", "PAYMENT.CAPTURE.COMPLETED");
+        String customId = "sim-evt-" + Instant.now().toEpochMilli();
+
+        WebhookEvent event = WebhookEvent.builder()
+                .providerEventId(customId)
+                .eventType(eventType)
+                .verificationStatus(WebhookEvent.VerificationStatus.VERIFIED)
+                .rawPayload("{\"id\":\"" + customId + "\",\"event_type\":\"" + eventType + "\",\"summary\":\"Simulated Sandbox Webhook Event\",\"create_time\":\"" + Instant.now() + "\"}")
+                .processedAt(Instant.now())
+                .processingResult("SIMULATED_VERIFIED")
+                .createdAt(Instant.now())
+                .build();
+        webhookRepo.save(event);
+        return ResponseEntity.ok(event);
     }
 }

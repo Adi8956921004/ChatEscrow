@@ -81,4 +81,26 @@ public class MilestoneController {
     public ResponseEntity<Map<String, Object>> getDisputePack(@PathVariable String milestoneId) {
         return ResponseEntity.ok(milestoneService.getDisputePack(milestoneId));
     }
+
+    @PostMapping("/milestones/{milestoneId}/refund")
+    public ResponseEntity<Milestone> refundMilestoneEscrow(@PathVariable String milestoneId,
+                                                           @RequestBody(required = false) Map<String, String> body) {
+        String actor = body != null ? body.getOrDefault("actorId", "client") : "client";
+        String reason = body != null ? body.get("reason") : "Milestone escrow refund";
+        return ResponseEntity.ok(milestoneService.refundMilestoneEscrow(milestoneId, actor, reason));
+    }
+
+    @PostMapping("/milestones/{milestoneId}/resolve-dispute")
+    public ResponseEntity<Map<String, Object>> resolveDispute(@PathVariable String milestoneId,
+                                                              @RequestBody Map<String, String> body) {
+        String actor = body.getOrDefault("actorId", "client");
+        String resolution = body.getOrDefault("resolution", "split");
+        String note = body.get("note");
+        return ResponseEntity.ok(milestoneService.resolveDispute(milestoneId, actor, resolution, note));
+    }
+
+    @PostMapping("/milestones/{milestoneId}/ai-mediation")
+    public ResponseEntity<Map<String, Object>> aiMediateDispute(@PathVariable String milestoneId) {
+        return ResponseEntity.ok(milestoneService.aiMediateDispute(milestoneId));
+    }
 }
