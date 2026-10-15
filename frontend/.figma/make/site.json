@@ -1,0 +1,10 @@
+{
+  "description": "Streamline client-freelancer agreements with AI-driven tools for creating, managing, and reviewing contracts, ensuring clarity and efficiency in project workflows.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}

@@ -1,0 +1,29 @@
+# Environment & Secrets
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# Backend build & logs
+backend/target/
+backend/.mvn/
+backend/*.log
+*.log
+
+# Frontend build & dependencies
+frontend/node_modules/
+frontend/dist/
+frontend/.turbo/
+.pnpm-debug.log*
+
+# IDE & OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
+
+# In-memory H2 database files (if persistent)
+*.h2.db
+*.trace.db
