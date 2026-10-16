@@ -28,7 +28,7 @@ public class AiService {
     @Value("${ai.api-key:}")
     private String apiKey;
 
-    @Value("${ai.model:gemini-2.0-flash}")
+    @Value("${ai.model:gemini-3.8-flash}")
     private String model;
 
     @Value("${ai.base-url:https://generativelanguage.googleapis.com/v1beta}")
@@ -177,11 +177,88 @@ public class AiService {
         }
     }
 
+    /**
+     * AI Dispute Mediation:
+     * Evaluates milestone criteria, deliverables, submitted evidence, and client's stated disagreement.
+     * Generates a neutral, evidence-grounded compromise recommendation.
+     */
+    public String mediateDispute(String milestoneTitle, java.math.BigDecimal amount, String acceptanceCriteria,
+                                 String submissionSummary, String evidenceLinks, String disagreementReason) {
+        if (!isConfigured()) {
+            lastCallLive = false;
+            log.warn("AI_API_KEY not configured – returning demo dispute mediation");
+            return demoDisputeMediation(milestoneTitle, amount);
+        }
+
+        String systemPrompt = """
+                You are a neutral AI Dispute Mediator for ChatEscrow, an escrow milestone payment protection platform.
+                A dispute or disagreement has arisen regarding a project milestone.
+                Your task is to analyze the milestone scope, acceptance criteria, freelancer's submitted work,
+                and the client's stated disagreement reason, and propose a fair, evidence-based compromise recommendation.
+                
+                RULES:
+                - Remain neutral, objective, and constructive.
+                - Evaluate what proportion of the scope/criteria was legitimately delivered vs what was omitted or defective.
+                - Provide concrete split recommendations. The sum of recommendedSplitClient and recommendedSplitFreelancer must equal the milestone amount (e.g. 50/50, 70/30, 30/70, 100/0, or 0/100).
+                - recommendedResolution should be one of: "MUTUAL_SPLIT_50_50", "PARTIAL_SPLIT", "RELEASE_TO_FREELANCER", "REFUND_TO_CLIENT", "REVISION_EXTENSION".
+                - Always remind the parties that AI mediation is advisory and requires mutual consent to execute.
+                
+                Return ONLY a valid JSON object (no markdown, no explanation):
+                {
+                  "milestoneTitle": "string",
+                  "amount": number,
+                  "analysis": "string",
+                  "recommendedResolution": "MUTUAL_SPLIT_50_50|PARTIAL_SPLIT|RELEASE_TO_FREELANCER|REFUND_TO_CLIENT|REVISION_EXTENSION",
+                  "recommendedSplitClient": number,
+                  "recommendedSplitFreelancer": number,
+                  "alternativeOption": "string",
+                  "advisoryNote": "string"
+                }
+                """;
+
+        String prompt = systemPrompt
+                + "\n\nMILESTONE: " + milestoneTitle + " (Amount: " + (amount != null ? amount.toPlainString() : "0") + " USD)"
+                + "\n\nAGREED ACCEPTANCE CRITERIA:\n" + (acceptanceCriteria != null ? acceptanceCriteria : "Not specified")
+                + "\n\nFREELANCER SUBMITTED WORK SUMMARY:\n" + (submissionSummary != null ? submissionSummary : "None provided")
+                + (evidenceLinks != null && !evidenceLinks.isBlank() ? "\n\nEVIDENCE LINKS:\n" + evidenceLinks : "")
+                + "\n\nCLIENT DISAGREEMENT / DISPUTE REASON:\n" + (disagreementReason != null ? disagreementReason : "Disagreement flagged");
+
+        try {
+            String result = callGemini(prompt);
+            lastCallLive = true;
+            return result;
+        } catch (Exception e) {
+            lastCallLive = false;
+            log.warn("Gemini call failed for mediation: {} – falling back to demo dispute mediation", e.getMessage());
+            return demoDisputeMediation(milestoneTitle, amount);
+        }
+    }
+
     private String callGemini(String prompt) {
         try {
-            boolean isBearer = apiKey.startsWith("ya29.") || apiKey.startsWith("AQ.");
+            return callGeminiWithModel(prompt, this.model);
+        } catch (Exception e) {
+            if (e.getMessage() != null && (e.getMessage().contains("503") || e.getMessage().contains("429") || e.getMessage().contains("UNAVAILABLE"))) {
+                log.warn("Primary model {} busy (503/429), retrying with gemini-flash-latest...", this.model);
+                try {
+                    return callGeminiWithModel(prompt, "gemini-flash-latest");
+                } catch (Exception ex) {
+                    log.error("Fallback model gemini-flash-latest also failed: {}", ex.getMessage());
+                    throw ex;
+                }
+            }
+            throw e;
+        }
+    }
+
+    private String callGeminiWithModel(String prompt, String targetModel) {
+        try {
             String cleanApiKey = apiKey.trim();
-            String url = baseUrl + "/models/" + model + ":generateContent" + (!isBearer ? "?key=" + cleanApiKey : "");
+            boolean isOAuthBearer = cleanApiKey.startsWith("ya29.");
+
+            // Construct URL - include ?key= parameter for API keys (both AIza... and new AQ... format)
+            String encodedKey = java.net.URLEncoder.encode(cleanApiKey, java.nio.charset.StandardCharsets.UTF_8);
+            String url = baseUrl + "/models/" + targetModel + ":generateContent" + (!isOAuthBearer ? "?key=" + encodedKey : "");
 
             ObjectNode part = mapper.createObjectNode();
             part.put("text", prompt);
@@ -200,7 +277,7 @@ public class AiService {
                     .contentType(MediaType.APPLICATION_JSON)
                     .header("x-goog-api-key", cleanApiKey);
 
-            if (isBearer) {
+            if (isOAuthBearer) {
                 requestSpec.header("Authorization", "Bearer " + cleanApiKey);
             }
 
@@ -313,5 +390,27 @@ public class AiService {
                   "aiDisclaimer": "AI analysis is advisory. The client makes the final acceptance decision."
                 }
                 """;
+    }
+
+    private String demoDisputeMediation(String milestoneTitle, java.math.BigDecimal amount) {
+        java.math.BigDecimal amt = amount != null ? amount : java.math.BigDecimal.ZERO;
+        java.math.BigDecimal half = amt.divide(java.math.BigDecimal.valueOf(2));
+        return """
+                {
+                  "milestoneTitle": "%s",
+                  "amount": %s,
+                  "analysis": "Based on the criteria and work submitted, core frontend frames and responsive layouts were delivered, but 1 criterion required minor adjustments. A balanced compromise protects both parties' investment.",
+                  "recommendedResolution": "MUTUAL_SPLIT_50_50",
+                  "recommendedSplitClient": %s,
+                  "recommendedSplitFreelancer": %s,
+                  "alternativeOption": "Grant a 4-day revision window for the freelancer to address missing criteria.",
+                  "advisoryNote": "AI Dispute Mediation provides neutral advisory recommendations. Escrow release or refund requires party authorization."
+                }
+                """.formatted(
+                    milestoneTitle != null ? milestoneTitle.replace("\"", "\\\"") : "Milestone",
+                    amt.toPlainString(),
+                    half.toPlainString(),
+                    half.toPlainString()
+                );
     }
 }
