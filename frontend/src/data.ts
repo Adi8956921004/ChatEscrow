@@ -118,6 +118,17 @@ export interface AuditEvent {
   createdAt: string
 }
 
+export interface WebhookEvent {
+  id: string
+  providerEventId: string
+  eventType: string
+  verificationStatus: "VERIFIED" | "FAILED" | "SKIPPED"
+  rawPayload: string
+  processingResult?: string
+  processedAt?: string
+  createdAt: string
+}
+
 // ── API helpers ──────────────────────────────────────────────
 
 async function api<T>(path: string, opts?: RequestInit): Promise<T> {
@@ -198,6 +209,32 @@ export const depositDemoEscrow = (projectId: string, milestoneId: string, amount
   })
 export const getProjectPayments = (projectId: string) =>
   api<Payment[]>(`/api/projects/${projectId}/payments`)
+export const refundPayment = (paymentId: string, reason?: string) =>
+  api<Payment>(`/api/payments/${paymentId}/refund`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  })
+export const refundMilestone = (milestoneId: string, reason?: string) =>
+  api<Milestone>(`/api/milestones/${milestoneId}/refund`, {
+    method: "POST",
+    body: JSON.stringify({ reason }),
+  })
+export const resolveDispute = (milestoneId: string, resolution: "split" | "refund" | "release", note?: string) =>
+  api<Record<string, unknown>>(`/api/milestones/${milestoneId}/resolve-dispute`, {
+    method: "POST",
+    body: JSON.stringify({ resolution, note }),
+  })
+export const getAiMediation = (milestoneId: string) =>
+  api<Record<string, unknown>>(`/api/milestones/${milestoneId}/ai-mediation`, {
+    method: "POST",
+  })
+export const getWebhookEvents = () =>
+  api<WebhookEvent[]>("/api/webhooks/events")
+export const simulateWebhook = (eventType: string) =>
+  api<WebhookEvent>("/api/webhooks/simulate", {
+    method: "POST",
+    body: JSON.stringify({ eventType }),
+  })
 
 // Timeline
 export const getTimeline = (projectId: string) =>
