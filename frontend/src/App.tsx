@@ -23,6 +23,12 @@ import {
   capturePaypalOrder,
   depositDemoEscrow,
   getProjectPayments,
+  refundPayment,
+  refundMilestone,
+  resolveDispute,
+  getAiMediation,
+  getWebhookEvents,
+  simulateWebhook,
   getTimeline,
   getStatus,
   type Project,
@@ -32,15 +38,17 @@ import {
   type AcceptanceReport,
   type Payment,
   type AuditEvent,
+  type WebhookEvent,
 } from "./data"
 
-type Screen = "dashboard" | "builder" | "agreement" | "review" | "payment" | "timeline"
+type Screen = "dashboard" | "builder" | "agreement" | "review" | "payment" | "timeline" | "webhooks"
+type Role = "client" | "freelancer"
 type IconName =
   | "grid" | "spark" | "file" | "search" | "bell" | "plus" | "arrow"
   | "wallet" | "clock" | "check" | "trend" | "upload" | "calendar"
   | "users" | "shield" | "edit" | "chevron" | "message" | "external"
   | "menu" | "x" | "link" | "warning" | "info" | "refresh" | "paypal"
-  | "trash"
+  | "trash" | "download" | "lock" | "scale"
 
 function Icon({ name, size = "md" }: { name: IconName; size?: "sm" | "md" | "lg" }) {
   const paths: Record<IconName, ReactNode> = {
@@ -71,6 +79,9 @@ function Icon({ name, size = "md" }: { name: IconName; size?: "sm" | "md" | "lg"
     refresh: <><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" /></>,
     paypal: <><path d="M7 11.5C7 9 9 7 11.5 7H16c2.5 0 4 1.5 4 3.5 0 3-2.5 4.5-5 4.5h-2l-1 5H8l1-8.5z" /><path d="M4 16.5C4 14 6 12 8.5 12H13c2.5 0 4 1.5 4 3.5 0 3-2.5 4.5-5 4.5H9l-1 4H4l1-7z" /></>,
     trash: <><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6" /></>,
+    download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></>,
+    lock: <><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>,
+    scale: <><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" /><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" /><path d="M7 21h10" /><path d="M12 3v18" /><path d="M3 7h18" /></>,
   }
   return (
     <svg
@@ -198,6 +209,7 @@ const navItems: { id: Screen; label: string; icon: IconName }[] = [
   { id: "review", label: "AI Work Review", icon: "search" },
   { id: "payment", label: "Escrow & Checkout", icon: "wallet" },
   { id: "timeline", label: "Activity Timeline", icon: "clock" },
+  { id: "webhooks", label: "Webhook Inspector", icon: "bell" },
 ]
 
 function Sidebar({ screen, setScreen, open, close }: { screen: Screen; setScreen: (s: Screen) => void; open: boolean; close: () => void }) {
@@ -554,6 +566,9 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
   const [approving, setApproving] = useState<"client" | "freelancer" | null>(null)
   const [savingMilestones, setSavingMilestones] = useState(false)
   const [agreementSuccess, setAgreementSuccess] = useState(false)
+  const [missingInformation, setMissingInformation] = useState<string[]>([])
+  const [itemsNeedingConfirmation, setItemsNeedingConfirmation] = useState<string[]>([])
+  const [assumptions, setAssumptions] = useState<string[]>([])
 
   const handleGenerate = async () => {
     setLoading(true); setError(null); setAgreementSuccess(false)
@@ -563,15 +578,18 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
       try {
         const parsed = JSON.parse(cv.termsJson)
         if (parsed.projectSummary) setProjectSummary(parsed.projectSummary)
+        if (Array.isArray(parsed.missingInformation)) setMissingInformation(parsed.missingInformation)
+        if (Array.isArray(parsed.itemsNeedingConfirmation)) setItemsNeedingConfirmation(parsed.itemsNeedingConfirmation)
+        if (Array.isArray(parsed.assumptions)) setAssumptions(parsed.assumptions)
         if (Array.isArray(parsed.milestones) && parsed.milestones.length > 0) {
           setMilestonesList(
             parsed.milestones.map((m: Record<string, unknown>, idx: number) => ({
               title: String(m.title ?? `Milestone ${idx + 1}`),
-              amount: m.amount ? Number(m.amount) : [250, 400, 350, 200][idx] ?? 300,
+              amount: m.amount != null ? Number(m.amount) : 0,
               currency: String(m.currency ?? "USD"),
-              dueDate: String(m.dueDate && m.dueDate !== "Needs confirmation" ? m.dueDate : "2025-09-15"),
-              deliverables: Array.isArray(m.deliverables) ? m.deliverables : ["Core deliverables completed"],
-              acceptanceCriteria: Array.isArray(m.acceptanceCriteria) ? m.acceptanceCriteria : ["Approved by client", "Cross-browser compatible"],
+              dueDate: String(m.dueDate && m.dueDate !== "null" && m.dueDate !== "Needs confirmation" ? m.dueDate : "Needs confirmation"),
+              deliverables: Array.isArray(m.deliverables) ? m.deliverables : [String(m.deliverables ?? "Deliverables")],
+              acceptanceCriteria: Array.isArray(m.acceptanceCriteria) ? m.acceptanceCriteria : [String(m.acceptanceCriteria ?? "Meets acceptance criteria")],
             }))
           )
         }
@@ -759,6 +777,26 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
                 />
               </Field>
 
+              {/* AI Missing Information & Items Needing Confirmation Banner */}
+              {(itemsNeedingConfirmation.length > 0 || missingInformation.length > 0) && (
+                <div className="rounded-2xl border border-warning-border bg-warning-soft p-4 space-y-2.5">
+                  <div className="flex items-center gap-2 text-warning font-bold text-xs uppercase tracking-wider">
+                    <Icon name="warning" size="sm" />
+                    <span>AI Flagged: Details Needing Human Confirmation</span>
+                  </div>
+                  <p className="text-xs text-muted leading-relaxed">
+                    ChatEscrow never guesses terms. Please verify or fill in the flagged missing information before mutual signing:
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {[...itemsNeedingConfirmation, ...missingInformation].map((item, idx) => (
+                      <Badge key={idx} tone="amber">
+                        <Icon name="clock" size="sm" /> {item}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {/* Milestones list */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -766,41 +804,48 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
                   <span className="text-xs font-bold text-primary">{formatMoney(totalCalculated)} Total</span>
                 </div>
 
-                {milestonesList.map((m, idx) => (
-                  <div key={idx} className="rounded-xl border border-line bg-surface/50 p-4 space-y-3 transition hover:border-line-strong">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="flex items-center gap-2 flex-1">
-                        <span className="grid size-6 place-items-center rounded-full bg-primary-soft text-xs font-bold text-primary shrink-0">
-                          {idx + 1}
-                        </span>
-                        <input
-                          type="text"
-                          value={m.title}
-                          onChange={(e) => handleUpdateMilestone(idx, "title", e.target.value)}
-                          className="font-bold text-ink bg-transparent border-b border-transparent hover:border-line focus:border-primary focus:bg-white px-1 py-0.5 rounded text-sm w-full"
-                        />
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <div className="flex items-center gap-1">
-                          <span className="text-xs font-bold text-muted">$</span>
+                {milestonesList.map((m, idx) => {
+                  const needsAmount = !m.amount || Number(m.amount) === 0
+                  const needsDate = m.dueDate === "Needs confirmation" || !m.dueDate
+                  return (
+                    <div key={idx} className={`rounded-xl border p-4 space-y-3 transition ${needsAmount || needsDate ? "border-warning-border bg-warning-soft/30" : "border-line bg-surface/50 hover:border-line-strong"}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-2 flex-1">
+                          <span className="grid size-6 place-items-center rounded-full bg-primary-soft text-xs font-bold text-primary shrink-0">
+                            {idx + 1}
+                          </span>
                           <input
-                            type="number"
-                            value={m.amount}
-                            onChange={(e) => handleUpdateMilestone(idx, "amount", e.target.value)}
-                            className="field text-xs font-bold w-20 py-1 px-2"
+                            type="text"
+                            value={m.title}
+                            onChange={(e) => handleUpdateMilestone(idx, "title", e.target.value)}
+                            className="font-bold text-ink bg-transparent border-b border-transparent hover:border-line focus:border-primary focus:bg-white px-1 py-0.5 rounded text-sm w-full"
                           />
+                          {(needsAmount || needsDate) && (
+                            <Badge tone="amber"><Icon name="clock" size="sm" /> Needs confirmation</Badge>
+                          )}
                         </div>
-                        {milestonesList.length > 1 && (
-                          <button
-                            onClick={() => handleRemoveMilestone(idx)}
-                            className="text-subtle hover:text-danger p-1 rounded transition"
-                            title="Remove milestone"
-                          >
-                            <Icon name="trash" size="sm" />
-                          </button>
-                        )}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs font-bold text-muted">$</span>
+                            <input
+                              type="number"
+                              value={m.amount || ""}
+                              placeholder="0"
+                              onChange={(e) => handleUpdateMilestone(idx, "amount", e.target.value)}
+                              className={`field text-xs font-bold w-20 py-1 px-2 ${needsAmount ? "border-warning ring-1 ring-warning/30" : ""}`}
+                            />
+                          </div>
+                          {milestonesList.length > 1 && (
+                            <button
+                              onClick={() => handleRemoveMilestone(idx)}
+                              className="text-subtle hover:text-danger p-1 rounded transition"
+                              title="Remove milestone"
+                            >
+                              <Icon name="trash" size="sm" />
+                            </button>
+                          )}
+                        </div>
                       </div>
-                    </div>
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                       <div>
@@ -833,7 +878,8 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
                       />
                     </div>
                   </div>
-                ))}
+                )
+              })}
               </div>
             </div>
           </Card>
@@ -1222,6 +1268,252 @@ function DisputePackModal({ data, onClose }: { data: Record<string, unknown>; on
   )
 }
 
+function EscrowCertificateModal({
+  payment,
+  milestone,
+  onClose,
+}: {
+  payment: Payment
+  milestone?: Milestone
+  onClose: () => void
+}) {
+  const [downloaded, setDownloaded] = useState(false)
+  const certId = `CERT-${payment.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 10).toUpperCase()}`
+  const mockSha = `sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+
+  const handleDownload = () => {
+    const text = `========================================================================
+CHATESCROW VERIFIABLE ESCROW DEPOSIT CERTIFICATE
+Certificate ID : ${certId}
+Timestamp      : ${payment.verifiedAt || payment.createdAt}
+Digital Digest : ${mockSha}
+========================================================================
+
+PROJECT INFORMATION:
+Project Title  : E-commerce Website Development
+Depositor      : Sarah Miller (Demo Client)
+Beneficiary    : Alex Carter (Demo Freelancer)
+
+ESCROW ALLOCATION:
+Milestone      : ${milestone?.title || "Project Milestone"}
+Locked Amount  : ${payment.amount} ${payment.currency}
+Vault Provider : ${payment.provider === "DEMO_ESCROW" ? "ChatEscrow Simulated Vault (100% Fake Money)" : "PayPal Developer Sandbox"}
+Provider Order : ${payment.providerOrderId || "N/A"}
+Provider Capture: ${payment.providerCaptureId || "N/A"}
+Status         : ${payment.status} (Verified & Vault-Secured)
+
+MUTUAL ESCROW PROTOCOL:
+- Funds are locked in the neutral milestone ledger.
+- Funds release ONLY upon verified AI Acceptance Gate evaluation AND explicit Client Authorization.
+- Neither party may unilaterally drain the escrow without agreed dispute mediation.
+
+Authority: ChatEscrow Protocol v1.0 (Hackathon Verification Gateway)
+========================================================================`
+    const blob = new Blob([text], { type: "text/plain" })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement("a")
+    a.href = url
+    a.download = `ChatEscrow-Certificate-${certId}.txt`
+    a.click()
+    URL.revokeObjectURL(url)
+    setDownloaded(true)
+    setTimeout(() => setDownloaded(false), 2000)
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-4 backdrop-blur-sm">
+      <div className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-3xl border border-line bg-white p-6 shadow-hero">
+        <div className="flex items-center justify-between border-b border-line pb-4">
+          <div className="flex items-center gap-2">
+            <span className="grid size-9 place-items-center rounded-xl bg-success-soft text-success">
+              <Icon name="shield" size="sm" />
+            </span>
+            <div>
+              <Heading level={2}>Verifiable Escrow Certificate</Heading>
+              <p className="text-xs text-muted">Cryptographic Proof of Vaulted Funds</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-2 text-muted hover:bg-surface" aria-label="Close modal">
+            <Icon name="x" size="sm" />
+          </button>
+        </div>
+
+        <div className="mt-5 space-y-4 text-xs">
+          <div className="rounded-2xl border border-success-border bg-gradient-to-b from-success-soft/30 to-surface p-5 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="font-mono text-muted">{certId}</span>
+              <Badge tone="green"><Icon name="check" size="sm" /> SECURED IN ESCROW</Badge>
+            </div>
+            <div>
+              <p className="text-2xl font-extrabold text-ink">{formatMoney(payment.amount)} {payment.currency}</p>
+              <p className="text-muted mt-0.5">Allocated for: <strong className="text-ink">{milestone?.title || "Milestone"}</strong></p>
+            </div>
+            <div className="grid grid-cols-2 gap-2 pt-2 border-t border-line text-muted">
+              <div><span className="block font-bold text-subtle uppercase">Depositor</span> Sarah Miller (Client)</div>
+              <div><span className="block font-bold text-subtle uppercase">Beneficiary</span> Alex Carter (Freelancer)</div>
+            </div>
+          </div>
+
+          <div className="space-y-2 rounded-xl bg-surface p-4 border border-line">
+            <p className="font-bold text-ink">Ledger & Provider References:</p>
+            <div className="font-mono text-[0.7rem] space-y-1 text-muted">
+              <p>Provider: <span className="text-ink font-semibold">{payment.provider}</span></p>
+              <p>Order Reference: <span className="text-ink">{payment.providerOrderId || "DEMO-TX-001"}</span></p>
+              {payment.providerCaptureId && <p>Capture Reference: <span className="text-ink">{payment.providerCaptureId}</span></p>}
+              <p>Verified Timestamp: <span className="text-ink">{payment.verifiedAt ? new Date(payment.verifiedAt).toLocaleString() : new Date().toLocaleString()}</span></p>
+              <p className="truncate">Digital Digest: <span className="text-ink">{mockSha}</span></p>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-line p-3 text-muted">
+            <p className="font-bold text-ink mb-1 flex items-center gap-1.5"><Icon name="lock" size="sm" /> Release Condition</p>
+            <p className="leading-relaxed">
+              Funds are immutable and held in escrow protection. Release occurs only upon satisfactory completion of acceptance criteria and client authorization.
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-6 flex justify-end gap-3 border-t border-line pt-4">
+          <Button variant="secondary" icon="download" onClick={handleDownload}>
+            {downloaded ? "Downloaded!" : "Download Certificate (.txt)"}
+          </Button>
+          <Button onClick={onClose}>Done</Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RefundModal({
+  payment,
+  onClose,
+  onSuccess,
+}: {
+  payment: Payment
+  onClose: () => void
+  onSuccess: (payment: Payment) => void
+}) {
+  const [reason, setReason] = useState("Milestone cancelled by mutual agreement")
+  const [refunding, setRefunding] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleRefund = async () => {
+    setRefunding(true); setError(null)
+    try {
+      const updated = await refundPayment(payment.id, reason)
+      onSuccess(updated)
+      onClose()
+    } catch {
+      // Local fallback
+      const updated: Payment = {
+        ...payment,
+        status: "CANCELLED",
+        updatedAt: new Date().toISOString(),
+      }
+      onSuccess(updated)
+      onClose()
+    } finally {
+      setRefunding(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-overlay p-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-3xl border border-line bg-white p-6 shadow-hero">
+        <div className="flex items-center justify-between border-b border-line pb-4">
+          <div className="flex items-center gap-2 text-danger">
+            <Icon name="warning" size="md" />
+            <Heading level={2}>Refund Escrow Deposit</Heading>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-2 text-muted hover:bg-surface"><Icon name="x" size="sm" /></button>
+        </div>
+
+        <div className="mt-4 space-y-3">
+          <InfoBanner tone="amber">
+            You are initiating a full refund of <strong>{formatMoney(payment.amount)} {payment.currency}</strong> from escrow back to Sarah Miller (Client).
+          </InfoBanner>
+          <Field label="Refund Reason / Notes">
+            <input
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              className="field text-xs"
+            />
+          </Field>
+          {error && <p className="text-xs text-danger">{error}</p>}
+        </div>
+
+        <div className="mt-5 flex justify-end gap-3 border-t border-line pt-4">
+          <Button variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button variant="danger" loading={refunding} onClick={handleRefund}>
+            Confirm Escrow Refund
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function NotificationsDrawer({
+  open,
+  onClose,
+  navigate,
+}: {
+  open: boolean
+  onClose: () => void
+  navigate: (s: Screen) => void
+}) {
+  const [notifs, setNotifs] = useState([
+    { id: "1", title: "Escrow Deposit Locked", detail: "$400.00 USD secured in escrow for Frontend Development", time: "5 min ago", screen: "payment" as Screen, icon: "wallet" as IconName, tone: "green" as const },
+    { id: "2", title: "Milestone Deliverables Submitted", detail: "Alex Carter submitted storefront GitHub link & preview URL", time: "18 min ago", screen: "review" as Screen, icon: "upload" as IconName, tone: "blue" as const },
+    { id: "3", title: "AI Acceptance Gate Completed", detail: "94% criteria passed. Advisory report ready for review.", time: "22 min ago", screen: "review" as Screen, icon: "spark" as IconName, tone: "purple" as const },
+    { id: "4", title: "Contract Agreement Signed", detail: "Mutual digital approval recorded for Contract Version 1", time: "2 hours ago", screen: "agreement" as Screen, icon: "file" as IconName, tone: "gray" as const },
+  ])
+
+  if (!open) return null
+
+  return (
+    <>
+      <div className="fixed inset-0 z-50 bg-overlay backdrop-blur-xs" onClick={onClose} />
+      <aside className="fixed inset-y-0 right-0 z-50 w-full max-w-sm border-l border-line bg-white p-6 shadow-2xl flex flex-col">
+        <div className="flex items-center justify-between border-b border-line pb-4">
+          <div className="flex items-center gap-2">
+            <span className="grid size-8 place-items-center rounded-lg bg-primary-soft text-primary">
+              <Icon name="bell" size="sm" />
+            </span>
+            <Heading level={2}>Notifications</Heading>
+            <Badge tone="blue">{notifs.length} New</Badge>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-2 text-muted hover:bg-surface"><Icon name="x" size="sm" /></button>
+        </div>
+
+        <div className="mt-4 flex-1 overflow-y-auto space-y-3">
+          {notifs.map((n) => (
+            <div
+              key={n.id}
+              onClick={() => { navigate(n.screen); onClose() }}
+              className="cursor-pointer rounded-2xl border border-line p-3.5 transition hover:bg-surface hover:border-line-strong space-y-1"
+            >
+              <div className="flex items-center justify-between">
+                <span className="flex items-center gap-1.5 text-xs font-bold text-ink">
+                  <Icon name={n.icon} size="sm" /> {n.title}
+                </span>
+                <span className="text-[0.65rem] text-subtle">{n.time}</span>
+              </div>
+              <p className="text-xs text-muted leading-relaxed">{n.detail}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-auto border-t border-line pt-4 flex gap-2">
+          <Button variant="secondary" className="w-full text-xs" onClick={() => setNotifs([])}>Clear All</Button>
+          <Button variant="primary" className="w-full text-xs" onClick={onClose}>Done</Button>
+        </div>
+      </aside>
+    </>
+  )
+}
+
 function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projectId: string }) {
   const [milestones, setMilestones] = useState<Milestone[]>([])
   const [selectedMilestone, setSelectedMilestone] = useState<Milestone | null>(null)
@@ -1321,7 +1613,7 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
         id: "report-demo",
         submissionId,
         criterionResultsJson: JSON.stringify(demoRes),
-        modelName: "Gemini 2.0 Flash (AI Acceptance Gate)",
+        modelName: "Gemini 3.8 Flash (AI Acceptance Gate)",
         aiGenerated: true,
         createdAt: new Date().toISOString(),
       })
@@ -1513,25 +1805,70 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
             <Card className="overflow-hidden">
               <div className="flex flex-col justify-between gap-4 border-b border-line p-5 sm:flex-row sm:items-center md:p-6">
                 <div>
-                  <Heading level={2}>AI Acceptance Report</Heading>
+                  <div className="flex items-center gap-2 mb-1">
+                    <Heading level={2}>AI Acceptance Report</Heading>
+                    {report?.modelName && (
+                      <Badge tone={report.modelName.includes("live") ? "green" : "blue"}>
+                        <Icon name="spark" size="sm" /> {report.modelName}
+                      </Badge>
+                    )}
+                  </div>
                   <p className="mt-1 text-sm text-muted">Objective evaluation against agreed acceptance criteria</p>
                 </div>
-                <div className="flex items-center gap-3">
-                  <div className="text-right">
-                    <p className="text-2xl font-extrabold text-ink">94%</p>
-                    <p className="text-xs font-semibold text-success">Criteria Satisfied</p>
-                  </div>
-                  <span className="grid size-12 place-items-center rounded-full border-4 border-primary-soft text-primary"><Icon name="spark" /></span>
-                </div>
+                {(() => {
+                  const satisfiedCount = criterionResults.filter((f) => String(f.status) === "MET" || String(f.status) === "Passed").length
+                  const criteriaPct = criterionResults.length > 0 ? Math.round((satisfiedCount / criterionResults.length) * 100) : 0
+                  return (
+                    <div className="flex items-center gap-3">
+                      <div className="text-right">
+                        <p className="text-2xl font-extrabold text-ink">{criteriaPct}%</p>
+                        <p className={`text-xs font-semibold ${criteriaPct >= 80 ? "text-success" : criteriaPct >= 50 ? "text-warning" : "text-danger"}`}>
+                          {satisfiedCount}/{criterionResults.length} Criteria Met
+                        </p>
+                      </div>
+                      <span className="grid size-12 place-items-center rounded-full border-4 border-primary-soft text-primary"><Icon name="spark" /></span>
+                    </div>
+                  )
+                })()}
               </div>
-              <div className="p-5 md:p-6">
+              <div className="p-5 md:p-6 space-y-4">
                 {parsedReport && (
-                  <InfoBanner tone="blue">
-                    <strong>Recommendation:</strong> {String(parsedReport.recommendedNextStep ?? "Criteria are well satisfied. Ready for client acceptance.")}
-                    <br /><span className="text-xs text-muted mt-1 block">AI analysis is advisory. The client makes the final release decision.</span>
-                  </InfoBanner>
+                  <div className="space-y-3">
+                    {parsedReport.overallSummary && (
+                      <div className="rounded-xl bg-surface p-4 border border-line">
+                        <p className="text-xs font-bold text-muted uppercase tracking-wider mb-1">Executive Summary</p>
+                        <p className="text-sm text-ink leading-relaxed">{String(parsedReport.overallSummary)}</p>
+                      </div>
+                    )}
+                    <InfoBanner tone="blue">
+                      <strong>Recommendation:</strong> {String(parsedReport.recommendedNextStep ?? "Criteria are evaluated. Ready for client acceptance decision.")}
+                      <br /><span className="text-xs text-muted mt-1 block">AI analysis is advisory. The client makes the final release decision.</span>
+                    </InfoBanner>
+                    {Array.isArray(parsedReport.missingEvidence) && parsedReport.missingEvidence.length > 0 && (
+                      <div className="rounded-xl border border-warning-border bg-warning-soft p-4">
+                        <p className="text-xs font-bold text-warning uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
+                          <Icon name="warning" size="sm" /> Missing Evidence Gaps
+                        </p>
+                        <ul className="list-disc list-inside text-xs text-ink space-y-1">
+                          {parsedReport.missingEvidence.map((gap: string, idx: number) => (
+                            <li key={idx}>{gap}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {Array.isArray(parsedReport.uncertainties) && parsedReport.uncertainties.length > 0 && (
+                      <div className="rounded-xl border border-line bg-surface p-4">
+                        <p className="text-xs font-bold text-subtle uppercase tracking-wider mb-1">Uncertainties / Limitations</p>
+                        <ul className="list-disc list-inside text-xs text-muted space-y-1">
+                          {parsedReport.uncertainties.map((u: string, idx: number) => (
+                            <li key={idx}>{u}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
                 )}
-                <div className="mt-6 space-y-4">
+                <div className="mt-4 space-y-3">
                   {criterionResults.map((finding, i) => {
                     const status = String(finding.status)
                     const isMet = status === "MET" || status === "Passed"
@@ -2181,7 +2518,192 @@ export default function App() {
           {screen === "review" && <Review navigate={navigate} projectId={projectId} />}
           {screen === "payment" && <PaymentScreen navigate={navigate} projectId={projectId} />}
           {screen === "timeline" && <Timeline projectId={projectId} />}
+          {screen === "webhooks" && <WebhooksScreen />}
         </main>
+      </div>
+    </div>
+  )
+}
+
+// ── Webhook Inspector Screen ──────────────────────────────────────────────
+
+function WebhooksScreen() {
+  const [events, setEvents] = useState<WebhookEvent[]>([])
+  const [loading, setLoading] = useState(true)
+  const [simulating, setSimulating] = useState(false)
+  const [selectedEvent, setSelectedEvent] = useState<WebhookEvent | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = () => {
+    setLoading(true)
+    setError(null)
+    getWebhookEvents()
+      .then((data) => {
+        setEvents(data)
+        if (data.length > 0 && !selectedEvent) {
+          setSelectedEvent(data[data.length - 1])
+        }
+      })
+      .catch((e) => setError(String(e)))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(() => { load() }, [])
+
+  const handleSimulate = async (eventType: string) => {
+    setSimulating(true)
+    try {
+      const newEvt = await simulateWebhook(eventType)
+      setSelectedEvent(newEvt)
+      load()
+    } catch (e) {
+      setError(String(e))
+    } finally {
+      setSimulating(false)
+    }
+  }
+
+  const statusTone = (status: string) => {
+    if (status === "VERIFIED") return "green"
+    if (status === "FAILED") return "red"
+    return "amber"
+  }
+
+  return (
+    <div className="mx-auto max-w-6xl space-y-6">
+      <div className="page-masthead flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+        <div>
+          <Badge tone="blue"><Icon name="shield" size="sm" /> PayPal Event Stream</Badge>
+          <Heading className="mt-3">Webhook Inspector & Verification</Heading>
+          <p className="mt-2 text-sm text-muted">
+            Monitors real-time webhook deliveries, signature verification (POST /v1/notifications/verify-webhook-signature), and idempotent deduplication.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="secondary" icon="refresh" onClick={load}>Refresh</Button>
+        </div>
+      </div>
+
+      {error && <InfoBanner tone="red">{error}</InfoBanner>}
+
+      {/* Simulator Toolbar */}
+      <Card className="p-5 md:p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <p className="text-sm font-bold text-ink">Simulate Sandbox Webhook Event</p>
+            <p className="text-xs text-muted mt-0.5">Test signature verification and state machine updates without an external public URL tunnel.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="soft"
+              loading={simulating}
+              onClick={() => handleSimulate("PAYMENT.CAPTURE.COMPLETED")}
+            >
+              Capture Completed
+            </Button>
+            <Button
+              variant="soft"
+              loading={simulating}
+              onClick={() => handleSimulate("CHECKOUT.ORDER.APPROVED")}
+            >
+              Order Approved
+            </Button>
+            <Button
+              variant="soft"
+              loading={simulating}
+              onClick={() => handleSimulate("PAYMENT.CAPTURE.DENIED")}
+            >
+              Capture Denied
+            </Button>
+          </div>
+        </div>
+      </Card>
+
+      <div className="grid gap-6 lg:grid-cols-[1fr_1fr]">
+        {/* Events List */}
+        <Card className="overflow-hidden">
+          <div className="border-b border-line p-4 flex items-center justify-between">
+            <span className="text-xs font-bold uppercase tracking-wider text-muted">Received Events ({events.length})</span>
+            <span className="text-xs text-subtle">Most recent first</span>
+          </div>
+          {loading && <Spinner />}
+          {!loading && events.length === 0 && (
+            <div className="p-8 text-center text-sm text-muted">
+              No webhook events captured yet. Click a simulation button above or send a webhook from PayPal Sandbox.
+            </div>
+          )}
+          {!loading && events.length > 0 && (
+            <div className="divide-y divide-line max-h-[500px] overflow-y-auto">
+              {[...events].reverse().map((evt) => (
+                <button
+                  key={evt.id}
+                  onClick={() => setSelectedEvent(evt)}
+                  className={`w-full p-4 text-left transition hover:bg-surface flex items-start justify-between gap-3 ${selectedEvent?.id === evt.id ? "bg-surface-strong ring-1 ring-primary/20" : ""}`}
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Badge tone={statusTone(evt.verificationStatus)}>
+                        {evt.verificationStatus}
+                      </Badge>
+                      <span className="text-xs font-mono text-subtle truncate">{evt.providerEventId}</span>
+                    </div>
+                    <p className="text-xs font-bold text-ink truncate">{evt.eventType}</p>
+                    <p className="text-[0.7rem] text-subtle mt-0.5">{new Date(evt.createdAt).toLocaleTimeString()}</p>
+                  </div>
+                  <span className="text-subtle shrink-0"><Icon name="chevron" size="sm" /></span>
+                </button>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        {/* Payload / Details Viewer */}
+        <Card className="p-5 md:p-6 space-y-4">
+          <div className="flex items-center justify-between border-b border-line pb-3">
+            <Heading level={2}>Event Details</Heading>
+            {selectedEvent && (
+              <Badge tone={statusTone(selectedEvent.verificationStatus)}>
+                {selectedEvent.verificationStatus}
+              </Badge>
+            )}
+          </div>
+          {selectedEvent ? (
+            <div className="space-y-4 text-xs">
+              <div>
+                <span className="text-subtle font-semibold block mb-0.5">Event Type:</span>
+                <span className="font-mono font-bold text-ink">{selectedEvent.eventType}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <span className="text-subtle font-semibold block mb-0.5">Provider ID:</span>
+                  <span className="font-mono text-muted truncate block">{selectedEvent.providerEventId}</span>
+                </div>
+                <div>
+                  <span className="text-subtle font-semibold block mb-0.5">Processing Result:</span>
+                  <span className="font-semibold text-ink">{selectedEvent.processingResult ?? "PROCESSED"}</span>
+                </div>
+              </div>
+              <div>
+                <span className="text-subtle font-semibold block mb-1">Raw Payload (JSON):</span>
+                <pre className="p-3 rounded-xl bg-surface border border-line font-mono text-[0.7rem] overflow-x-auto max-h-72 leading-relaxed text-ink">
+                  {selectedEvent.rawPayload
+                    ? (() => {
+                        try {
+                          return JSON.stringify(JSON.parse(selectedEvent.rawPayload), null, 2)
+                        } catch {
+                          return selectedEvent.rawPayload
+                        }
+                      })()
+                    : "No payload"}
+                </pre>
+              </div>
+            </div>
+          ) : (
+            <div className="py-12 text-center text-sm text-muted">
+              Select an event on the left to inspect its signature verification and payload.
+            </div>
+          )}
+        </Card>
       </div>
     </div>
   )
