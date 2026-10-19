@@ -4,6 +4,8 @@ import com.chatescrow.backend.ai.AiService;
 import com.chatescrow.backend.model.*;
 import com.chatescrow.backend.repository.*;
 import com.chatescrow.backend.paypal.PayPalService;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -23,9 +25,11 @@ public class MilestoneService {
     private final SubmissionRepository submissionRepo;
     private final AcceptanceReportRepository reportRepo;
     private final ContractVersionRepository contractRepo;
+    private final PaymentRepository paymentRepo;
     private final AiService aiService;
     private final ProjectService projectService;
     private final PayPalService paypalService;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public Milestone getMilestone(String id) {
         return milestoneRepo.findById(id)
@@ -164,14 +168,22 @@ public class MilestoneService {
      * Authorised milestone payout/release workflow.
      * Enforces required conditions:
      * 1. Milestone must be in ACCEPTED state.
-     * 2. Uses PayPal Payouts API if enabled, or visibly labelled DEMO_SIMULATED status.
-     * 3. Records an auditable timeline event.
+     * 2. A CAPTURED payment must exist for the milestone (no release without verified funds).
+     * 3. Uses PayPal Payouts API if enabled, or visibly labelled DEMO_SIMULATED status.
+     * 4. Records an auditable timeline event with safe JSON built via ObjectMapper.
      */
     @Transactional
     public Map<String, Object> releaseMilestone(String milestoneId, String actorId, String recipientEmail) {
         Milestone m = getMilestone(milestoneId);
         if (m.getStatus() != Milestone.MilestoneStatus.ACCEPTED) {
             throw new IllegalStateException("Milestone cannot be released unless it is in ACCEPTED status. Current: " + m.getStatus());
+        }
+
+        // Require a captured payment before releasing funds
+        boolean hasCapturedPayment = paymentRepo.findByMilestoneId(milestoneId).stream()
+                .anyMatch(p -> p.getStatus() == Payment.PaymentStatus.CAPTURED);
+        if (!hasCapturedPayment) {
+            throw new IllegalStateException("Cannot release milestone: no captured payment found for milestone " + milestoneId + ". Fund the milestone via PayPal before releasing.");
         }
 
         Project project = projectService.getProject(m.getProjectId());
@@ -183,12 +195,19 @@ public class MilestoneService {
                 effectiveRecipient,
                 m.getAmount() != null ? m.getAmount() : java.math.BigDecimal.ZERO,
                 m.getCurrency() != null ? m.getCurrency() : "USD",
-                "Release for: " + m.getTitle()
+                "Milestone release for: " + m.getTitle()
         );
 
-        projectService.audit(m.getProjectId(), actorId, actorId,
-                "MILESTONE_PAYOUT_RELEASED", "Milestone", milestoneId,
-                "{\"batchId\":\"" + result.batchId() + "\",\"status\":\"" + result.status() + "\",\"isSimulated\":" + result.isSimulated() + "}");
+        try {
+            ObjectNode meta = objectMapper.createObjectNode();
+            meta.put("batchId", result.batchId());
+            meta.put("status", result.status());
+            meta.put("isSimulated", result.isSimulated());
+            projectService.audit(m.getProjectId(), actorId, actorId,
+                    "MILESTONE_PAYOUT_RELEASED", "Milestone", milestoneId, objectMapper.writeValueAsString(meta));
+        } catch (Exception e) {
+            log.warn("Failed to write audit JSON for milestone release", e);
+        }
 
         Map<String, Object> resp = new HashMap<>();
         resp.put("milestoneId", milestoneId);
@@ -250,7 +269,7 @@ public class MilestoneService {
         );
     }
 
-    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    // objectMapper is declared in the field block above
 
     /**
      * AI Dispute Mediation: Evaluates disagreement and submitted evidence via Gemini to provide an advisory compromise.

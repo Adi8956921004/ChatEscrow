@@ -703,7 +703,7 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
             </div>
             <div className="flex gap-2">
               <Button variant="secondary" onClick={() => navigate("agreement")}>View Agreement</Button>
-              <Button icon="wallet" onClick={() => navigate("payment")}>Fund Escrow Now →</Button>
+              <Button icon="wallet" onClick={() => navigate("payment")}>Fund Milestone Now →</Button>
             </div>
           </div>
         </InfoBanner>
@@ -888,8 +888,8 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
           <Card className="p-5 md:p-6">
             <div className="flex items-center justify-between border-b border-line pb-4">
               <div>
-                <Heading level={2}>Mutual Approval (Smart Escrow Protocol)</Heading>
-                <p className="mt-1 text-xs text-muted">Both parties must explicitly approve before escrow funding is activated.</p>
+                <Heading level={2}>Mutual Approval (Milestone Payment Protocol)</Heading>
+                <p className="mt-1 text-xs text-muted">Both parties must explicitly approve before milestone funding is activated.</p>
               </div>
               <Badge tone={clientApproved && freelancerApproved ? "green" : "amber"}>
                 {clientApproved && freelancerApproved ? "Fully Agreed" : "Pending Signature"}
@@ -1014,12 +1014,12 @@ function Agreement({ navigate, projectId, onRefresh }: { navigate: (s: Screen) =
             <Badge tone="green"><Icon name="check" size="sm" /> Terms Agreed</Badge>
           </div>
           <Heading>E-commerce Website Development</Heading>
-          <p className="mt-2 text-sm text-muted">Sarah Miller (Client) ↔ Alex Carter (Freelancer) · Escrow Protected</p>
+          <p className="mt-2 text-sm text-muted">Sarah Miller (Client) ↔ Alex Carter (Freelancer) · Milestone Payment Protection</p>
         </div>
         <div className="flex gap-3">
           <Button variant="secondary" icon="plus" onClick={() => setShowAddModal(true)}>+ Add Milestone</Button>
           <Button variant="secondary" icon="edit" onClick={() => navigate("builder")}>Edit Agreement</Button>
-          <Button icon="wallet" onClick={() => navigate("payment")}>Escrow Checkout</Button>
+          <Button icon="wallet" onClick={() => navigate("payment")}>Fund Milestone</Button>
         </div>
       </div>
 
@@ -1070,7 +1070,7 @@ function Agreement({ navigate, projectId, onRefresh }: { navigate: (s: Screen) =
                 <Badge tone="green"><Icon name="check" size="sm" /> Approved</Badge>
               </div>
             </div>
-            <Button variant="soft" icon="wallet" onClick={() => navigate("payment")}>Fund in Escrow</Button>
+            <Button variant="soft" icon="wallet" onClick={() => navigate("payment")}>Fund Milestone</Button>
           </div>
         </Card>
       )}
@@ -1150,7 +1150,7 @@ function Agreement({ navigate, projectId, onRefresh }: { navigate: (s: Screen) =
                   <Button className="w-full" icon="search" onClick={() => navigate("review")}>Open AI Work Review</Button>
                 )}
                 {selected.status === "NOT_STARTED" && (
-                  <Button className="w-full" variant="secondary" icon="wallet" onClick={() => navigate("payment")}>Fund in Escrow (Fake Money / Sandbox)</Button>
+                  <Button className="w-full" variant="secondary" icon="wallet" onClick={() => navigate("payment")}>Fund Milestone (Sandbox / Fake Money)</Button>
                 )}
                 {selected.status === "ACCEPTED" && (
                   <div className="space-y-2">
@@ -1597,23 +1597,29 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
       const r = await evaluateSubmission(submissionId)
       setReport(r)
       try { setParsedReport(JSON.parse(r.criterionResultsJson)) } catch { setParsedReport(null) }
-    } catch {
-      // Demo report
+    } catch (err) {
+      // Demo report — clearly labelled, with realistic mixed results (not all-green)
       const demoRes = {
         criterionResults: [
-          { criterion: "Matches approved designs", status: "MET", evidence: "Layout, spacing, typography, and component states match approved design frames.", confidence: "high" },
-          { criterion: "Works across modern browsers", status: "MET", evidence: "Verified in Chrome, Safari, Firefox, and Edge viewports.", confidence: "high" },
-          { criterion: "Lighthouse accessibility score above 90", status: "MET", evidence: "Lighthouse audit returned 94 accessibility score.", confidence: "high" },
+          { criterion: "Matches approved designs", status: "MET", evidence: "Submitted screenshots show layout, typography, and component states consistent with the referenced design frames.", gap: null, confidence: "high" },
+          { criterion: "Works across modern browsers", status: "PARTIALLY_MET", evidence: "Evidence provided for Chrome and Firefox. Safari and Edge not confirmed.", gap: "Missing Safari and Edge verification.", confidence: "medium" },
+          { criterion: "Lighthouse accessibility score above 90", status: "UNVERIFIABLE", evidence: "No Lighthouse report included in submission.", gap: "Lighthouse report not provided. Score cannot be verified from submitted evidence.", confidence: "low" },
         ],
-        recommendedNextStep: "Accept milestone and authorize escrow release.",
-        aiDisclaimer: "AI acceptance check is advisory. Client maintains final approval authority.",
+        overallSummary: "Submission partially meets the agreed criteria. Design fidelity is strong. Cross-browser coverage and accessibility score require additional evidence before full acceptance.",
+        missingEvidence: ["Safari/Edge test results", "Lighthouse accessibility report"],
+        uncertainties: ["Accessibility score is unverifiable without a Lighthouse report."],
+        recommendedNextStep: "Request freelancer to provide Safari/Edge screenshots and a Lighthouse report before approving the milestone.",
+        aiDisclaimer: "AI analysis is advisory. The client makes the final acceptance decision.",
+        _demoMode: true,
       }
+      const errMsg = err instanceof Error ? err.message : "AI service unavailable"
+      setError(`AI service offline — showing sample demo report. (${errMsg})`)
       setParsedReport(demoRes)
       setReport({
         id: "report-demo",
         submissionId,
         criterionResultsJson: JSON.stringify(demoRes),
-        modelName: "Gemini 3.8 Flash (AI Acceptance Gate)",
+        modelName: "demo-mode (backend unavailable)",
         aiGenerated: true,
         createdAt: new Date().toISOString(),
       })
@@ -1626,12 +1632,14 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
     if (!selectedMilestone) return
     setDeciding(type); setError(null)
     try {
-      if (type === "accept") await acceptMilestone(selectedMilestone.id).catch(() => {})
-      else if (type === "revision") await requestRevision(selectedMilestone.id, note).catch(() => {})
-      else await flagDisagreement(selectedMilestone.id, note).catch(() => {})
+      if (type === "accept") await acceptMilestone(selectedMilestone.id)
+      else if (type === "revision") await requestRevision(selectedMilestone.id, note)
+      else await flagDisagreement(selectedMilestone.id, note)
       setDecision(type)
       setSelectedMilestone((prev) => prev ? { ...prev, status: type === "accept" ? "ACCEPTED" : type === "revision" ? "REVISION_REQUESTED" : "DISAGREEMENT_FLAGGED" } : null)
       setMilestones((prev) => prev.map((m) => m.id === selectedMilestone.id ? { ...m, status: type === "accept" ? "ACCEPTED" : type === "revision" ? "REVISION_REQUESTED" : "DISAGREEMENT_FLAGGED" } : m))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to record decision. Please try again.")
     } finally {
       setDeciding(null)
     }
@@ -1643,14 +1651,8 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
     try {
       const res = await releaseMilestone(selectedMilestone.id, recipientEmail)
       setReleaseResult(res)
-    } catch {
-      // Simulated release
-      setReleaseResult({
-        payoutBatchId: "DEMO-PAYOUT-" + Date.now(),
-        payoutStatus: "SUCCESS (Simulated Release)",
-        isSimulated: true,
-        message: `Escrow release of ${formatMoney(selectedMilestone.amount)} authorized to ${recipientEmail}`,
-      })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Payout release failed. Check backend connectivity and PayPal credentials.")
     } finally {
       setReleasing(false)
     }
@@ -1671,7 +1673,7 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
         auditTimeline: [
           { id: "e1", eventType: "MILESTONE_ACCEPTED", actorName: "Sarah Miller", createdAt: new Date().toISOString() },
         ],
-        disclaimer: "Assembled for transparency and neutral escrow dispute resolution.",
+        disclaimer: "Assembled for transparency and neutral dispute review.",
       })
       setDisputePackOpen(true)
     } finally {

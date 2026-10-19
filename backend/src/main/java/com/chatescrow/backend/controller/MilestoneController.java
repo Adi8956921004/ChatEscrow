@@ -46,10 +46,17 @@ public class MilestoneController {
         return milestoneService.getReports(submissionId);
     }
 
+    /**
+     * Accept a milestone. Only the client role may call this endpoint.
+     */
     @PostMapping("/milestones/{milestoneId}/accept")
-    public ResponseEntity<Milestone> acceptMilestone(@PathVariable String milestoneId,
-                                                      @RequestBody Map<String, String> body) {
+    public ResponseEntity<?> acceptMilestone(@PathVariable String milestoneId,
+                                             @RequestBody Map<String, String> body) {
         String actor = body.getOrDefault("actorId", "client");
+        String role  = body.getOrDefault("role", "client");
+        if (!"client".equalsIgnoreCase(role)) {
+            return ResponseEntity.status(403).body(Map.of("error", "Only the client may accept a milestone."));
+        }
         return ResponseEntity.ok(milestoneService.acceptMilestone(milestoneId, actor));
     }
 
@@ -69,11 +76,18 @@ public class MilestoneController {
         return ResponseEntity.ok(milestoneService.flagDisagreement(milestoneId, actor, reason));
     }
 
+    /**
+     * Release milestone payout. Only the client role may authorize a release.
+     */
     @PostMapping("/milestones/{milestoneId}/release")
-    public ResponseEntity<Map<String, Object>> releaseMilestone(@PathVariable String milestoneId,
-                                                                @RequestBody(required = false) Map<String, String> body) {
+    public ResponseEntity<?> releaseMilestone(@PathVariable String milestoneId,
+                                              @RequestBody(required = false) Map<String, String> body) {
         String actor = body != null ? body.getOrDefault("actorId", "client") : "client";
+        String role  = body != null ? body.getOrDefault("role", "client") : "client";
         String recipientEmail = body != null ? body.get("recipientEmail") : null;
+        if (!"client".equalsIgnoreCase(role)) {
+            return ResponseEntity.status(403).body(Map.of("error", "Only the client may authorize a payout release."));
+        }
         return ResponseEntity.ok(milestoneService.releaseMilestone(milestoneId, actor, recipientEmail));
     }
 
@@ -82,25 +96,7 @@ public class MilestoneController {
         return ResponseEntity.ok(milestoneService.getDisputePack(milestoneId));
     }
 
-    @PostMapping("/milestones/{milestoneId}/refund")
-    public ResponseEntity<Milestone> refundMilestoneEscrow(@PathVariable String milestoneId,
-                                                           @RequestBody(required = false) Map<String, String> body) {
-        String actor = body != null ? body.getOrDefault("actorId", "client") : "client";
-        String reason = body != null ? body.get("reason") : "Milestone escrow refund";
-        return ResponseEntity.ok(milestoneService.refundMilestoneEscrow(milestoneId, actor, reason));
-    }
-
-    @PostMapping("/milestones/{milestoneId}/resolve-dispute")
-    public ResponseEntity<Map<String, Object>> resolveDispute(@PathVariable String milestoneId,
-                                                              @RequestBody Map<String, String> body) {
-        String actor = body.getOrDefault("actorId", "client");
-        String resolution = body.getOrDefault("resolution", "split");
-        String note = body.get("note");
-        return ResponseEntity.ok(milestoneService.resolveDispute(milestoneId, actor, resolution, note));
-    }
-
-    @PostMapping("/milestones/{milestoneId}/ai-mediation")
-    public ResponseEntity<Map<String, Object>> aiMediateDispute(@PathVariable String milestoneId) {
-        return ResponseEntity.ok(milestoneService.aiMediateDispute(milestoneId));
-    }
+    // NOTE: /refund, /resolve-dispute, and /ai-mediation endpoints have been removed.
+    // They were P2 scope and are not required for the hackathon demo submission.
+    // Dispute resolution is handled externally via the dispute-pack export.
 }

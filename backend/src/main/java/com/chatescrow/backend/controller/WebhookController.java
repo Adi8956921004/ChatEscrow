@@ -42,18 +42,7 @@ public class WebhookController {
 
         log.info("Received PayPal webhook: transmissionId={}, time={}", transmissionId, transmissionTime);
 
-        // Deduplication: reject duplicate events
-        if (transmissionId != null && webhookRepo.findByProviderEventId(transmissionId).isPresent()) {
-            log.warn("Duplicate webhook event ignored: {}", transmissionId);
-            return ResponseEntity.ok(Map.of("status", "duplicate_ignored"));
-        }
-
-        String eventType = "UNKNOWN";
-        try {
-            JsonNode payloadNode = objectMapper.readTree(rawPayload);
-            eventType = payloadNode.path("event_type").asText("UNKNOWN");
-        } catch (Exception ignored) {}
-
+        // Step 1: Verify signature BEFORE deduplication to prevent forged-ID attacks
         WebhookEvent.VerificationStatus status = WebhookEvent.VerificationStatus.SKIPPED;
         if (transmissionId != null && transmissionSig != null && paypalService.isConfigured()) {
             boolean verified = paypalService.verifyWebhookSignature(
@@ -61,16 +50,38 @@ public class WebhookController {
             status = verified ? WebhookEvent.VerificationStatus.VERIFIED : WebhookEvent.VerificationStatus.FAILED;
         }
 
-        String processingResult = "STORED";
+        // Step 2: Extract event metadata from payload
+        String eventType = "UNKNOWN";
+        String eventId = null;
+        try {
+            JsonNode payloadNode = objectMapper.readTree(rawPayload);
+            eventType = payloadNode.path("event_type").asText("UNKNOWN");
+            // Use stable event ID from PayPal payload body (not transmission ID which changes on retries)
+            eventId = payloadNode.path("id").asText(null);
+        } catch (Exception ignored) {}
+
+        // Step 3: Deduplicate on event ID (stable across retries)
+        String stableId = eventId != null ? eventId : (transmissionId != null ? transmissionId : "evt-" + Instant.now().toEpochMilli());
+        if (webhookRepo.findByProviderEventId(stableId).isPresent()) {
+            log.warn("Duplicate webhook event ignored (eventId={})", stableId);
+            return ResponseEntity.ok(Map.of("status", "duplicate_ignored"));
+        }
+
+        // Step 4: Only process financial actions for VERIFIED events
+        String processingResult = "STORED_UNVERIFIED";
         if (status == WebhookEvent.VerificationStatus.VERIFIED) {
             processingResult = "PROCESSED_VERIFIED";
-            log.info("Webhook event verified successfully: type={}, id={}", eventType, transmissionId);
+            log.info("Webhook event verified successfully: type={}, eventId={}", eventType, stableId);
+        } else if (status == WebhookEvent.VerificationStatus.FAILED) {
+            // Failed verification: store for audit but do NOT trigger any financial action
+            log.warn("Webhook signature verification FAILED: type={}, transmissionId={} — stored for audit only", eventType, transmissionId);
+            processingResult = "STORED_VERIFICATION_FAILED";
         } else {
-            log.info("Webhook stored with status {}: type={}, id={}", status, eventType, transmissionId);
+            log.info("Webhook stored without verification (PayPal not configured): type={}, eventId={}", eventType, stableId);
         }
 
         WebhookEvent event = WebhookEvent.builder()
-                .providerEventId(transmissionId != null ? transmissionId : "evt-" + Instant.now().toEpochMilli())
+                .providerEventId(stableId)
                 .eventType(eventType)
                 .verificationStatus(status)
                 .rawPayload(rawPayload)
