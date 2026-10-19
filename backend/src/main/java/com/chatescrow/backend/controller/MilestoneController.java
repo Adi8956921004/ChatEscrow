@@ -1,7 +1,9 @@
 package com.chatescrow.backend.controller;
 
 import com.chatescrow.backend.model.*;
+import com.chatescrow.backend.security.SecurityService;
 import com.chatescrow.backend.service.MilestoneService;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -14,21 +16,26 @@ import java.util.Map;
 public class MilestoneController {
 
     private final MilestoneService milestoneService;
+    private final SecurityService securityService;
 
     @GetMapping("/milestones/{milestoneId}")
     public Milestone getMilestone(@PathVariable String milestoneId) {
         return milestoneService.getMilestone(milestoneId);
     }
 
+    /**
+     * Freelancer submits evidence. Only authorized freelancers may submit work evidence.
+     */
     @PostMapping("/milestones/{milestoneId}/submissions")
     public ResponseEntity<Submission> submitEvidence(@PathVariable String milestoneId,
-                                                      @RequestBody Map<String, String> body) {
-        String submittedBy = body.getOrDefault("submittedBy", "freelancer");
+                                                      @RequestBody Map<String, String> body,
+                                                      HttpServletRequest request) {
+        SecurityService.CurrentActor actor = securityService.requireFreelancer(request);
         String description = body.get("description");
         String evidenceLinks = body.get("evidenceLinks");
         String fileRefs = body.get("fileReferences");
         return ResponseEntity.ok(milestoneService.submitEvidence(
-                milestoneId, submittedBy, description, evidenceLinks, fileRefs));
+                milestoneId, actor.actorId(), description, evidenceLinks, fileRefs));
     }
 
     @GetMapping("/milestones/{milestoneId}/submissions")
@@ -51,29 +58,33 @@ public class MilestoneController {
      */
     @PostMapping("/milestones/{milestoneId}/accept")
     public ResponseEntity<?> acceptMilestone(@PathVariable String milestoneId,
-                                             @RequestBody Map<String, String> body) {
-        String actor = body.getOrDefault("actorId", "client");
-        String role  = body.getOrDefault("role", "client");
-        if (!"client".equalsIgnoreCase(role)) {
-            return ResponseEntity.status(403).body(Map.of("error", "Only the client may accept a milestone."));
-        }
-        return ResponseEntity.ok(milestoneService.acceptMilestone(milestoneId, actor));
+                                              HttpServletRequest request) {
+        SecurityService.CurrentActor actor = securityService.requireClient(request);
+        return ResponseEntity.ok(milestoneService.acceptMilestone(milestoneId, actor.actorId()));
     }
 
+    /**
+     * Request a revision. Only the client role may request revisions.
+     */
     @PostMapping("/milestones/{milestoneId}/request-revision")
     public ResponseEntity<Milestone> requestRevision(@PathVariable String milestoneId,
-                                                      @RequestBody Map<String, String> body) {
-        String actor = body.getOrDefault("actorId", "client");
-        String note = body.get("note");
-        return ResponseEntity.ok(milestoneService.requestRevision(milestoneId, actor, note));
+                                                      @RequestBody Map<String, String> body,
+                                                      HttpServletRequest request) {
+        SecurityService.CurrentActor actor = securityService.requireClient(request);
+        String note = body != null ? body.get("note") : null;
+        return ResponseEntity.ok(milestoneService.requestRevision(milestoneId, actor.actorId(), note));
     }
 
+    /**
+     * Flag disagreement. Only the client role may flag disagreements.
+     */
     @PostMapping("/milestones/{milestoneId}/flag-disagreement")
     public ResponseEntity<Milestone> flagDisagreement(@PathVariable String milestoneId,
-                                                       @RequestBody Map<String, String> body) {
-        String actor = body.getOrDefault("actorId", "client");
-        String reason = body.get("reason");
-        return ResponseEntity.ok(milestoneService.flagDisagreement(milestoneId, actor, reason));
+                                                       @RequestBody Map<String, String> body,
+                                                       HttpServletRequest request) {
+        SecurityService.CurrentActor actor = securityService.requireClient(request);
+        String reason = body != null ? body.get("reason") : null;
+        return ResponseEntity.ok(milestoneService.flagDisagreement(milestoneId, actor.actorId(), reason));
     }
 
     /**
@@ -81,22 +92,15 @@ public class MilestoneController {
      */
     @PostMapping("/milestones/{milestoneId}/release")
     public ResponseEntity<?> releaseMilestone(@PathVariable String milestoneId,
-                                              @RequestBody(required = false) Map<String, String> body) {
-        String actor = body != null ? body.getOrDefault("actorId", "client") : "client";
-        String role  = body != null ? body.getOrDefault("role", "client") : "client";
+                                              @RequestBody(required = false) Map<String, String> body,
+                                              HttpServletRequest request) {
+        SecurityService.CurrentActor actor = securityService.requireClient(request);
         String recipientEmail = body != null ? body.get("recipientEmail") : null;
-        if (!"client".equalsIgnoreCase(role)) {
-            return ResponseEntity.status(403).body(Map.of("error", "Only the client may authorize a payout release."));
-        }
-        return ResponseEntity.ok(milestoneService.releaseMilestone(milestoneId, actor, recipientEmail));
+        return ResponseEntity.ok(milestoneService.releaseMilestone(milestoneId, actor.actorId(), recipientEmail));
     }
 
     @GetMapping("/milestones/{milestoneId}/dispute-pack")
     public ResponseEntity<Map<String, Object>> getDisputePack(@PathVariable String milestoneId) {
         return ResponseEntity.ok(milestoneService.getDisputePack(milestoneId));
     }
-
-    // NOTE: /refund, /resolve-dispute, and /ai-mediation endpoints have been removed.
-    // They were P2 scope and are not required for the hackathon demo submission.
-    // Dispute resolution is handled externally via the dispute-pack export.
 }

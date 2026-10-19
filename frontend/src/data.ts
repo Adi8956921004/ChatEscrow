@@ -7,6 +7,14 @@
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8080"
 
+let currentActorRole: "client" | "freelancer" = "client"
+
+export const setActorRole = (role: "client" | "freelancer") => {
+  currentActorRole = role
+}
+
+export const getActorRole = (): "client" | "freelancer" => currentActorRole
+
 export type MilestoneStatus =
   | "NOT_STARTED"
   | "IN_PROGRESS"
@@ -106,6 +114,20 @@ export interface Payment {
   updatedAt: string
 }
 
+export interface Payout {
+  id: string
+  milestoneId: string
+  projectId: string
+  recipientEmail: string
+  amount: number
+  currency: string
+  payoutBatchId: string
+  status: string
+  simulated: boolean
+  provider: string
+  releasedAt: string
+}
+
 export interface AuditEvent {
   id: string
   projectId: string
@@ -122,7 +144,7 @@ export interface WebhookEvent {
   id: string
   providerEventId: string
   eventType: string
-  verificationStatus: "VERIFIED" | "FAILED" | "SKIPPED"
+  verificationStatus: "VERIFIED" | "FAILED" | "SKIPPED" | "SIMULATED"
   rawPayload: string
   processingResult?: string
   processedAt?: string
@@ -132,8 +154,15 @@ export interface WebhookEvent {
 // ── API helpers ──────────────────────────────────────────────
 
 async function api<T>(path: string, opts?: RequestInit): Promise<T> {
+  const actorId = currentActorRole === "client" ? "Sarah Miller" : "Alex Carter"
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json", ...opts?.headers },
+    headers: {
+      "Content-Type": "application/json",
+      "X-Actor-Role": currentActorRole,
+      "X-Actor-Id": actorId,
+      "Authorization": `Bearer ${currentActorRole}-demo-token`,
+      ...opts?.headers,
+    },
     ...opts,
   })
   if (!res.ok) {
@@ -157,6 +186,11 @@ export const generateDraft = (projectId: string, conversationText: string) =>
     method: "POST",
     body: JSON.stringify({ conversationText }),
   })
+export const saveDraft = (projectId: string, draftId: string, termsJson: string) =>
+  api<ContractVersion>(`/api/projects/${projectId}/contract-drafts/${draftId}`, {
+    method: "PUT",
+    body: JSON.stringify({ termsJson }),
+  })
 export const approveContract = (projectId: string, versionId: string, role: "client" | "freelancer") =>
   api<ContractVersion>(`/api/projects/${projectId}/contract-versions/${versionId}/approve`, {
     method: "POST",
@@ -174,17 +208,17 @@ export const getSubmissions = (milestoneId: string) =>
   api<Submission[]>(`/api/milestones/${milestoneId}/submissions`)
 export const evaluateSubmission = (submissionId: string) =>
   api<AcceptanceReport>(`/api/submissions/${submissionId}/evaluate`, { method: "POST", body: "{}" })
-export const acceptMilestone = (milestoneId: string, actorId = "client") =>
-  api<Milestone>(`/api/milestones/${milestoneId}/accept`, { method: "POST", body: JSON.stringify({ actorId }) })
+export const acceptMilestone = (milestoneId: string) =>
+  api<Milestone>(`/api/milestones/${milestoneId}/accept`, { method: "POST", body: "{}" })
 export const requestRevision = (milestoneId: string, note: string) =>
   api<Milestone>(`/api/milestones/${milestoneId}/request-revision`, {
     method: "POST",
-    body: JSON.stringify({ actorId: "client", note }),
+    body: JSON.stringify({ note }),
   })
 export const flagDisagreement = (milestoneId: string, reason: string) =>
   api<Milestone>(`/api/milestones/${milestoneId}/flag-disagreement`, {
     method: "POST",
-    body: JSON.stringify({ actorId: "client", reason }),
+    body: JSON.stringify({ reason }),
   })
 export const releaseMilestone = (milestoneId: string, recipientEmail?: string) =>
   api<Record<string, unknown>>(`/api/milestones/${milestoneId}/release`, {
@@ -195,14 +229,15 @@ export const getDisputePack = (milestoneId: string) =>
   api<Record<string, unknown>>(`/api/milestones/${milestoneId}/dispute-pack`)
 
 // Payments
-export const createPaypalOrder = (projectId: string, milestoneId: string, amount: number, currency = "USD") =>
+// Backend looks up stored milestone amount server-side; amount is not trusted from client
+export const createPaypalOrder = (projectId: string, milestoneId: string, currency = "USD") =>
   api<Record<string, unknown>>("/api/payments/paypal/orders", {
     method: "POST",
-    body: JSON.stringify({ projectId, milestoneId, amount, currency }),
+    body: JSON.stringify({ projectId, milestoneId, currency }),
   })
 export const capturePaypalOrder = (orderId: string) =>
   api<Record<string, unknown>>(`/api/payments/paypal/orders/${orderId}/capture`, { method: "POST", body: "{}" })
-export const depositDemoEscrow = (projectId: string, milestoneId: string, amount: number, currency = "USD") =>
+export const depositDemoEscrow = (projectId: string, milestoneId: string, amount?: number, currency = "USD") =>
   api<Payment>("/api/payments/demo-deposit", {
     method: "POST",
     body: JSON.stringify({ projectId, milestoneId, amount, currency }),
@@ -213,20 +248,6 @@ export const refundPayment = (paymentId: string, reason?: string) =>
   api<Payment>(`/api/payments/${paymentId}/refund`, {
     method: "POST",
     body: JSON.stringify({ reason }),
-  })
-export const refundMilestone = (milestoneId: string, reason?: string) =>
-  api<Milestone>(`/api/milestones/${milestoneId}/refund`, {
-    method: "POST",
-    body: JSON.stringify({ reason }),
-  })
-export const resolveDispute = (milestoneId: string, resolution: "split" | "refund" | "release", note?: string) =>
-  api<Record<string, unknown>>(`/api/milestones/${milestoneId}/resolve-dispute`, {
-    method: "POST",
-    body: JSON.stringify({ resolution, note }),
-  })
-export const getAiMediation = (milestoneId: string) =>
-  api<Record<string, unknown>>(`/api/milestones/${milestoneId}/ai-mediation`, {
-    method: "POST",
   })
 export const getWebhookEvents = () =>
   api<WebhookEvent[]>("/api/webhooks/events")
@@ -270,7 +291,7 @@ export const paymentStatusLabel: Record<PaymentStatus, string> = {
   UNKNOWN: "Unknown (reconcile)",
 }
 
-// Legacy static data for fallback / pre-connected UI
+// Fallback / initial presentation data
 export const activities = [
   { title: "Frontend milestone submitted", detail: "Alex submitted work for AI review", time: "18 min ago", type: "upload" },
   { title: "Design milestone approved", detail: "Sandbox payment marked ready for demo release", time: "2 days ago", type: "check" },
@@ -282,3 +303,4 @@ export const reviewFindings = [
   { criterion: "Works across modern browsers", status: "Passed", score: 100, evidence: "Automated checks completed in current Chrome, Safari, Firefox, and Edge viewports." },
   { criterion: "Lighthouse accessibility score above 90", status: "Needs attention", score: 88, evidence: "Two product-card controls need more descriptive accessible labels. Contrast and keyboard navigation passed." },
 ]
+

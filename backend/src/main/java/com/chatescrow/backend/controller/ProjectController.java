@@ -1,8 +1,11 @@
 package com.chatescrow.backend.controller;
 
 import com.chatescrow.backend.model.*;
+import com.chatescrow.backend.security.SecurityService;
 import com.chatescrow.backend.service.*;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.math.BigDecimal;
@@ -17,6 +20,7 @@ public class ProjectController {
     private final ProjectService projectService;
     private final ContractService contractService;
     private final PaymentService paymentService;
+    private final SecurityService securityService;
 
     // --- Projects ---
     @GetMapping("/projects")
@@ -66,11 +70,19 @@ public class ProjectController {
         return ResponseEntity.ok(contractService.saveDraft(projectId, termsJson));
     }
 
+    /**
+     * Approves contract version. Server validates caller role to prevent one party approving for another.
+     */
     @PostMapping("/projects/{projectId}/contract-versions/{versionId}/approve")
     public ResponseEntity<ContractVersion> approveContract(@PathVariable String projectId,
                                                             @PathVariable String versionId,
-                                                            @RequestBody Map<String, String> body) {
+                                                            @RequestBody Map<String, String> body,
+                                                            HttpServletRequest request) {
         String role = body.get("role"); // "client" or "freelancer"
+        if (role == null || role.isBlank()) {
+            return ResponseEntity.badRequest().build();
+        }
+        securityService.requireRole(request, role);
         return ResponseEntity.ok(contractService.approveVersion(versionId, role));
     }
 
@@ -102,41 +114,56 @@ public class ProjectController {
     }
 
     // --- Payments ---
+    /**
+     * Creates PayPal order. Amount is looked up server-side from milestone to prevent client tampering.
+     */
     @PostMapping("/payments/paypal/orders")
     public ResponseEntity<Map<String, Object>> createOrder(@RequestBody Map<String, Object> body) {
         String projectId = (String) body.get("projectId");
         String milestoneId = (String) body.get("milestoneId");
-        BigDecimal amount = new BigDecimal(body.get("amount").toString());
         String currency = (String) body.getOrDefault("currency", "USD");
-        return ResponseEntity.ok(paymentService.createOrder(projectId, milestoneId, amount, currency));
+        return ResponseEntity.ok(paymentService.createOrder(projectId, milestoneId, currency));
     }
 
+    /**
+     * Captures PayPal order. Returns 200 on success, or 4xx on failure.
+     */
     @PostMapping("/payments/paypal/orders/{orderId}/capture")
     public ResponseEntity<Map<String, Object>> captureOrder(@PathVariable String orderId) {
-        try {
-            return ResponseEntity.ok(paymentService.captureOrder(orderId));
-        } catch (Exception e) {
-            return ResponseEntity.ok(Map.of(
-                "status", "ERROR",
-                "orderId", orderId,
-                "message", e.getMessage() != null ? e.getMessage() : "Capture failed",
-                "sandbox", true
-            ));
+        Map<String, Object> result = paymentService.captureOrder(orderId);
+        String status = (String) result.get("status");
+        if ("CAPTURED".equalsIgnoreCase(status)) {
+            return ResponseEntity.ok(result);
+        } else if ("FAILED".equalsIgnoreCase(status)) {
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(result);
+        } else {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(result);
         }
     }
 
+    /**
+     * Records a simulated demo payment. Only clients may fund milestones.
+     */
     @PostMapping("/payments/demo-deposit")
-    public ResponseEntity<Payment> demoDeposit(@RequestBody Map<String, Object> body) {
+    public ResponseEntity<Payment> demoDeposit(@RequestBody Map<String, Object> body,
+                                               HttpServletRequest request) {
+        securityService.requireClient(request);
         String projectId = (String) body.get("projectId");
         String milestoneId = (String) body.get("milestoneId");
-        BigDecimal amount = new BigDecimal(body.get("amount").toString());
+        BigDecimal amount = body.get("amount") != null
+                ? new BigDecimal(body.get("amount").toString()) : null;
         String currency = (String) body.getOrDefault("currency", "USD");
         return ResponseEntity.ok(paymentService.recordDemoPayment(projectId, milestoneId, amount, currency));
     }
 
+    /**
+     * Refunds payment record. Only client role may request payment refund.
+     */
     @PostMapping("/payments/{paymentId}/refund")
     public ResponseEntity<Payment> refundPayment(@PathVariable String paymentId,
-                                                @RequestBody(required = false) Map<String, String> body) {
+                                                @RequestBody(required = false) Map<String, String> body,
+                                                HttpServletRequest request) {
+        securityService.requireClient(request);
         String reason = body != null ? body.get("reason") : "Refund requested";
         return ResponseEntity.ok(paymentService.refundPayment(paymentId, reason));
     }
@@ -154,7 +181,7 @@ public class ProjectController {
             "status", "UP",
             "paypalConfigured", paymentService.isPaypalConfigured(),
             "sandbox", true,
-            "note", "This is a hackathon prototype. No real funds are held or transferred."
+            "note", "ChatEscrow Prototype. Milestone payment workflow ledger."
         );
     }
 }

@@ -10,11 +10,14 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
+import java.util.UUID;
 
 @Service
 @Slf4j
@@ -35,8 +38,15 @@ public class PayPalService {
     @Value("${paypal.enable-payouts:false}")
     private boolean enablePayouts;
 
+    @Value("${app.frontend-url:${app.base-url:http://localhost:5173}}")
+    private String appBaseUrl;
+
     private final WebClient webClient;
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    // In-memory token cache
+    private String cachedToken = null;
+    private Instant tokenExpiresAt = Instant.MIN;
 
     public PayPalService(WebClient webClient) {
         this.webClient = webClient;
@@ -48,30 +58,39 @@ public class PayPalService {
     }
 
     /**
-     * Obtains a fresh OAuth 2.0 access token from PayPal.
-     * The client secret is never sent to the frontend.
+     * Obtains a cached or fresh OAuth 2.0 access token from PayPal.
      */
-    public String getAccessToken() {
+    public synchronized String getAccessToken() {
         if (!isConfigured()) {
             throw new PayPalNotConfiguredException("PayPal credentials not configured. Set PAYPAL_CLIENT_ID and PAYPAL_CLIENT_SECRET.");
         }
+
+        // Return cached token if valid for at least 60 more seconds
+        if (cachedToken != null && Instant.now().plusSeconds(60).isBefore(tokenExpiresAt)) {
+            return cachedToken;
+        }
+
         String credentials = Base64.getEncoder()
                 .encodeToString((clientId + ":" + clientSecret).getBytes(StandardCharsets.UTF_8));
 
-        String response = webClient.post()
-                .uri(baseUrl + "/v1/oauth2/token")
-                .header(HttpHeaders.AUTHORIZATION, "Basic " + credentials)
-                .contentType(MediaType.APPLICATION_FORM_URLENCODED)
-                .body(BodyInserters.fromFormData("grant_type", "client_credentials"))
-                .retrieve()
-                .bodyToMono(String.class)
-                .block();
-
         try {
+            String response = webClient.post()
+                    .uri(baseUrl + "/v1/oauth2/token")
+                    .header(HttpHeaders.AUTHORIZATION, "Basic " + credentials)
+                    .contentType(MediaType.APPLICATION_FORM_URLENCODED)
+                    .body(BodyInserters.fromFormData("grant_type", "client_credentials"))
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block();
+
             JsonNode node = objectMapper.readTree(response);
-            return node.get("access_token").asText();
+            cachedToken = node.get("access_token").asText();
+            int expiresIn = node.has("expires_in") ? node.get("expires_in").asInt() : 3600;
+            tokenExpiresAt = Instant.now().plusSeconds(expiresIn);
+            return cachedToken;
         } catch (Exception e) {
-            throw new RuntimeException("Failed to obtain PayPal access token", e);
+            log.error("Failed to obtain PayPal access token", e);
+            throw new RuntimeException("Failed to obtain PayPal access token: " + e.getMessage(), e);
         }
     }
 
@@ -94,14 +113,18 @@ public class PayPalService {
         body.set("purchase_units", objectMapper.createArrayNode().add(purchaseUnit));
 
         ObjectNode appContext = objectMapper.createObjectNode();
-        appContext.put("return_url", "http://localhost:5173/payment/success");
-        appContext.put("cancel_url", "http://localhost:5173/payment/cancel");
+        String safeBase = appBaseUrl.endsWith("/") ? appBaseUrl.substring(0, appBaseUrl.length() - 1) : appBaseUrl;
+        appContext.put("return_url", safeBase + "/payment/success");
+        appContext.put("cancel_url", safeBase + "/payment/cancel");
         body.set("application_context", appContext);
+
+        String requestId = "order-req-" + UUID.randomUUID();
 
         try {
             String response = webClient.post()
                     .uri(baseUrl + "/v2/checkout/orders")
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                    .header("PayPal-Request-Id", requestId)
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(body.toString())
                     .retrieve()
@@ -129,15 +152,18 @@ public class PayPalService {
 
     /**
      * Captures a previously approved PayPal order.
-     * Only call this after user has approved the order through PayPal UI.
+     * Validates that capture actually completed at PayPal.
+     * Never fakes captures for unapproved orders or errors.
      */
     public PayPalCaptureResult captureOrder(String orderId) {
         String token = getAccessToken();
+        String requestId = "capture-req-" + orderId;
 
         try {
             String response = webClient.post()
                     .uri(baseUrl + "/v2/checkout/orders/" + orderId + "/capture")
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                    .header("PayPal-Request-Id", requestId)
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue("{}")
                     .retrieve()
@@ -145,7 +171,7 @@ public class PayPalService {
                     .block();
 
             JsonNode result = objectMapper.readTree(response);
-            String status = result.get("status").asText();
+            String status = result.path("status").asText("UNKNOWN");
             String captureId = null;
             BigDecimal capturedAmount = null;
 
@@ -153,65 +179,27 @@ public class PayPalService {
                 JsonNode pu = result.get("purchase_units").get(0);
                 if (pu.has("payments") && pu.get("payments").has("captures")) {
                     JsonNode capture = pu.get("payments").get("captures").get(0);
-                    captureId = capture.get("id").asText();
-                    if (capture.has("amount")) {
-                        capturedAmount = new BigDecimal(capture.get("amount").get("value").asText());
+                    captureId = capture.path("id").asText(null);
+                    if (capture.has("amount") && capture.get("amount").has("value")) {
+                        try {
+                            capturedAmount = new BigDecimal(capture.get("amount").get("value").asText());
+                        } catch (Exception ignored) {}
                     }
                 }
             }
             return new PayPalCaptureResult(orderId, captureId, status, capturedAmount);
+        } catch (WebClientResponseException e) {
+            String errBody = e.getResponseBodyAsString();
+            log.error("PayPal captureOrder HTTP {} error for orderId={}: {}", e.getStatusCode(), orderId, errBody);
+            throw new RuntimeException("PayPal capture error (" + e.getStatusCode() + "): " + errBody, e);
         } catch (Exception e) {
-            log.error("PayPal captureOrder failed for orderId={}", orderId, e);
-            // PayPal Sandbox commonly returns 422 TRANSACTION_REFUSED due to cross-border
-            // buyer/seller account restrictions (e.g. IN buyer vs US seller account).
-            // For hackathon/demo: always provide a sandbox-simulated capture result so the
-            // full downstream workflow (ledger update, milestone release) can be demonstrated.
-            // No real money is involved — this is strictly a sandbox simulation.
-            boolean is422 = e.getMessage() != null && e.getMessage().contains("422");
-            try {
-                String token2 = getAccessToken();
-                String getResp = webClient.get()
-                        .uri(baseUrl + "/v2/checkout/orders/" + orderId)
-                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + token2)
-                        .retrieve()
-                        .bodyToMono(String.class)
-                        .block();
-                JsonNode orderNode = objectMapper.readTree(getResp);
-                String orderStatus = orderNode.path("status").asText();
-                log.info("Fallback verification for order {}: status={}", orderId, orderStatus);
-                // Simulate CAPTURED for APPROVED, CREATED (buyer visited PayPal), or any 422 in sandbox
-                boolean wasVisited = "APPROVED".equalsIgnoreCase(orderStatus)
-                        || "COMPLETED".equalsIgnoreCase(orderStatus)
-                        || "CREATED".equalsIgnoreCase(orderStatus);
-                if (wasVisited || is422) {
-                    log.warn("Sandbox simulation: order {} status={} — generating simulated capture (no real funds).",
-                            orderId, orderStatus);
-                    String mockCaptureId = "SANDBOX-SIM-" + java.util.UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-                    BigDecimal amount = null;
-                    if (orderNode.has("purchase_units")) {
-                        JsonNode pu = orderNode.get("purchase_units").get(0);
-                        if (pu.has("amount")) {
-                            try { amount = new BigDecimal(pu.get("amount").get("value").asText()); } catch (Exception ignored) {}
-                        }
-                    }
-                    return new PayPalCaptureResult(orderId, mockCaptureId, "COMPLETED", amount != null ? amount : new BigDecimal("400.00"));
-                }
-            } catch (Exception ex) {
-                log.error("Failed to check fallback order details for {}: {}", orderId, ex.getMessage());
-                // If we can't even reach PayPal (network issue) but got a 422, still simulate
-                if (is422) {
-                    log.warn("Network fallback: generating sandbox simulation for order {}", orderId);
-                    String mockCaptureId = "SANDBOX-NET-" + java.util.UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-                    return new PayPalCaptureResult(orderId, mockCaptureId, "COMPLETED", new BigDecimal("400.00"));
-                }
-            }
-            throw new RuntimeException("Failed to capture PayPal order: " + e.getMessage(), e);
+            log.error("PayPal captureOrder failed for orderId={}: {}", orderId, e.getMessage());
+            throw new RuntimeException("PayPal capture failed for order " + orderId + ": " + e.getMessage(), e);
         }
     }
 
     /**
      * Retrieves the current status of a PayPal order for backend verification.
-     * Never trust the frontend redirect alone; always verify via this call.
      */
     public Map<String, Object> getOrderDetails(String orderId) {
         String token = getAccessToken();
@@ -225,13 +213,12 @@ public class PayPalService {
             JsonNode node = objectMapper.readTree(response);
             return objectMapper.convertValue(node, Map.class);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to get PayPal order details", e);
+            throw new RuntimeException("Failed to get PayPal order details: " + e.getMessage(), e);
         }
     }
 
     /**
      * Verifies PayPal webhook signature via POST /v1/notifications/verify-webhook-signature
-     * Required by official PayPal best practices.
      */
     public boolean verifyWebhookSignature(String authAlgo, String certUrl,
                                            String transmissionId, String transmissionSig,
@@ -280,14 +267,15 @@ public class PayPalService {
 
     /**
      * Dispatches a milestone payout via PayPal Payouts API if enabled,
-     * or returns a transparently labelled DEMO_SIMULATED status if payouts are not enabled.
-     * Enforces idempotency via sender_item_id and PayPal-Request-Id header.
+     * or returns transparently labelled DEMO_SIMULATED status if payouts are not enabled.
+     * Enforces stable idempotency key.
      */
     public PayoutResult createPayout(String milestoneId, String recipientEmail,
-                                     BigDecimal amount, String currency, String note) {
+                                     BigDecimal amount, String currency, String note,
+                                     String idempotencyKey) {
         if (!enablePayouts || !isConfigured()) {
             return new PayoutResult(
-                    "simulated-" + java.util.UUID.randomUUID().toString().substring(0, 8),
+                    "simulated-" + UUID.randomUUID().toString().substring(0, 8),
                     "DEMO_SIMULATED",
                     true,
                     "Simulated release: Live PayPal Payouts requires verified business account approval and PAYPAL_ENABLE_PAYOUTS=true."
@@ -295,12 +283,12 @@ public class PayPalService {
         }
 
         String token = getAccessToken();
-        String senderBatchId = "batch-" + milestoneId + "-" + System.currentTimeMillis();
-        String senderItemId = "item-" + milestoneId;
+        String stableKey = (idempotencyKey != null && !idempotencyKey.isBlank())
+                ? idempotencyKey : "payout-" + milestoneId;
 
         ObjectNode body = objectMapper.createObjectNode();
         ObjectNode header = objectMapper.createObjectNode();
-        header.put("sender_batch_id", senderBatchId);
+        header.put("sender_batch_id", stableKey);
         header.put("email_subject", "Milestone Payment Release: " + note);
         header.put("email_message", "You have received a milestone payment release through ChatEscrow.");
         body.set("sender_batch_header", header);
@@ -310,7 +298,7 @@ public class PayPalService {
         item.put("recipient_type", "EMAIL");
         item.put("receiver", recipientEmail != null && !recipientEmail.isBlank() ? recipientEmail : "freelancer@example.com");
         item.put("note", note != null ? note : "Milestone release");
-        item.put("sender_item_id", senderItemId);
+        item.put("sender_item_id", "item-" + milestoneId);
         ObjectNode amountNode = objectMapper.createObjectNode();
         amountNode.put("value", amount.toPlainString());
         amountNode.put("currency", currency != null ? currency : "USD");
@@ -322,7 +310,7 @@ public class PayPalService {
             String response = webClient.post()
                     .uri(baseUrl + "/v1/payments/payouts")
                     .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
-                    .header("PayPal-Request-Id", senderBatchId)
+                    .header("PayPal-Request-Id", stableKey)
                     .contentType(MediaType.APPLICATION_JSON)
                     .bodyValue(body.toString())
                     .retrieve()

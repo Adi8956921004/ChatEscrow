@@ -1,20 +1,22 @@
 package com.chatescrow.backend.service;
 
 import com.chatescrow.backend.ai.AiService;
+import com.chatescrow.backend.exception.ResourceNotFoundException;
 import com.chatescrow.backend.model.*;
-import com.chatescrow.backend.repository.*;
 import com.chatescrow.backend.paypal.PayPalService;
+import com.chatescrow.backend.repository.*;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import java.time.Instant;
 import java.math.BigDecimal;
+import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.HashMap;
+import java.util.Optional;
 
 @Service
 @Slf4j
@@ -24,34 +26,19 @@ public class MilestoneService {
     private final MilestoneRepository milestoneRepo;
     private final SubmissionRepository submissionRepo;
     private final AcceptanceReportRepository reportRepo;
-    private final ContractVersionRepository contractRepo;
     private final PaymentRepository paymentRepo;
+    private final PayoutRepository payoutRepo;
     private final AiService aiService;
     private final ProjectService projectService;
     private final PayPalService paypalService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     public Milestone getMilestone(String id) {
+        if (id == null || id.isBlank()) {
+            throw new ResourceNotFoundException("Milestone ID is required");
+        }
         return milestoneRepo.findById(id)
-                .or(() -> {
-                    if (id != null) {
-                        String lower = id.toLowerCase();
-                        if (lower.contains("design")) {
-                            return milestoneRepo.findAll().stream().filter(m -> m.getTitle().toLowerCase().contains("design")).findFirst();
-                        }
-                        if (lower.contains("frontend")) {
-                            return milestoneRepo.findAll().stream().filter(m -> m.getTitle().toLowerCase().contains("frontend")).findFirst();
-                        }
-                        if (lower.contains("backend")) {
-                            return milestoneRepo.findAll().stream().filter(m -> m.getTitle().toLowerCase().contains("backend")).findFirst();
-                        }
-                        if (lower.contains("delivery") || lower.contains("qa")) {
-                            return milestoneRepo.findAll().stream().filter(m -> m.getTitle().toLowerCase().contains("delivery") || m.getTitle().toLowerCase().contains("qa")).findFirst();
-                        }
-                    }
-                    return milestoneRepo.findAll().stream().findFirst();
-                })
-                .orElseThrow(() -> new RuntimeException("Milestone not found: " + id));
+                .orElseThrow(() -> new ResourceNotFoundException("Milestone not found: " + id));
     }
 
     @Transactional
@@ -64,7 +51,7 @@ public class MilestoneService {
 
         Submission sub = Submission.builder()
                 .milestoneId(milestoneId)
-                .submittedBy(submittedBy)
+                .submittedBy(submittedBy != null ? submittedBy : "freelancer")
                 .description(description)
                 .evidenceLinks(evidenceLinks)
                 .fileReferences(fileRefs)
@@ -76,9 +63,12 @@ public class MilestoneService {
         m.setUpdatedAt(Instant.now());
         milestoneRepo.save(m);
 
-        projectService.audit(m.getProjectId(), submittedBy, submittedBy,
-                "MILESTONE_EVIDENCE_SUBMITTED", "Submission", sub.getId(),
-                "{\"milestoneId\":\"" + milestoneId + "\"}");
+        ObjectNode meta = objectMapper.createObjectNode();
+        meta.put("milestoneId", milestoneId);
+        meta.put("submissionId", sub.getId());
+
+        projectService.audit(m.getProjectId(), submittedBy != null ? submittedBy : "freelancer", submittedBy != null ? submittedBy : "freelancer",
+                "MILESTONE_EVIDENCE_SUBMITTED", "Submission", sub.getId(), meta.toString());
         return sub;
     }
 
@@ -89,7 +79,7 @@ public class MilestoneService {
     @Transactional
     public AcceptanceReport evaluateSubmission(String submissionId) {
         Submission sub = submissionRepo.findById(submissionId)
-                .orElseThrow(() -> new RuntimeException("Submission not found: " + submissionId));
+                .orElseThrow(() -> new ResourceNotFoundException("Submission not found: " + submissionId));
         Milestone m = getMilestone(sub.getMilestoneId());
 
         String reportJson = aiService.evaluateSubmission(
@@ -97,20 +87,29 @@ public class MilestoneService {
                 sub.getDescription(),
                 sub.getEvidenceLinks());
 
+        boolean isLive = aiService.isLastCallLive();
+        String modelName = isLive
+                ? (aiService.getModel() + " (live)")
+                : (aiService.isConfigured() ? "demo-mode (AI fallback)" : "demo-mode (AI key not configured)");
+
         AcceptanceReport report = AcceptanceReport.builder()
                 .submissionId(submissionId)
                 .criterionResultsJson(reportJson)
-                .evidenceSummary("Generated by AI from submitted evidence")
-                .overallSummary("See criterionResultsJson for full details")
-                .modelName(aiService.isLastCallLive() ? "gemini-3.8-flash (live)" : (aiService.isConfigured() ? "demo-mode (AI fallback)" : "demo-mode (AI key not configured)"))
-                .aiGenerated(true)
+                .evidenceSummary("Evaluation against agreed milestone acceptance criteria")
+                .overallSummary("AI Advisory Report for milestone: " + m.getTitle())
+                .modelName(modelName)
+                .aiGenerated(isLive)
                 .createdAt(Instant.now())
                 .build();
         report = reportRepo.save(report);
 
+        ObjectNode meta = objectMapper.createObjectNode();
+        meta.put("submissionId", submissionId);
+        meta.put("aiGenerated", isLive);
+        meta.put("model", modelName);
+
         projectService.audit(m.getProjectId(), "system", "AI",
-                "AI_ACCEPTANCE_REPORT_GENERATED", "AcceptanceReport", report.getId(),
-                "{\"submissionId\":\"" + submissionId + "\",\"aiConfigured\":" + aiService.isConfigured() + "}");
+                "AI_ACCEPTANCE_REPORT_GENERATED", "AcceptanceReport", report.getId(), meta.toString());
         return report;
     }
 
@@ -127,6 +126,7 @@ public class MilestoneService {
         m.setStatus(Milestone.MilestoneStatus.ACCEPTED);
         m.setUpdatedAt(Instant.now());
         m = milestoneRepo.save(m);
+
         projectService.audit(m.getProjectId(), actorId, actorId,
                 "MILESTONE_ACCEPTED", "Milestone", milestoneId, "{}");
         return m;
@@ -138,9 +138,11 @@ public class MilestoneService {
         m.setStatus(Milestone.MilestoneStatus.REVISION_REQUESTED);
         m.setUpdatedAt(Instant.now());
         m = milestoneRepo.save(m);
+
+        ObjectNode meta = objectMapper.createObjectNode();
+        meta.put("note", note != null ? note : "");
         projectService.audit(m.getProjectId(), actorId, actorId,
-                "MILESTONE_REVISION_REQUESTED", "Milestone", milestoneId,
-                "{\"note\":\"" + (note != null ? note.replace("\"", "'") : "") + "\"}");
+                "MILESTONE_REVISION_REQUESTED", "Milestone", milestoneId, meta.toString());
         return m;
     }
 
@@ -150,13 +152,16 @@ public class MilestoneService {
         m.setStatus(Milestone.MilestoneStatus.DISAGREEMENT_FLAGGED);
         m.setUpdatedAt(Instant.now());
         m = milestoneRepo.save(m);
+
+        ObjectNode meta = objectMapper.createObjectNode();
+        meta.put("reason", reason != null ? reason : "");
         projectService.audit(m.getProjectId(), actorId, actorId,
-                "MILESTONE_DISAGREEMENT_FLAGGED", "Milestone", milestoneId,
-                "{\"reason\":\"" + (reason != null ? reason.replace("\"", "'") : "") + "\"}");
+                "MILESTONE_DISAGREEMENT_FLAGGED", "Milestone", milestoneId, meta.toString());
         return m;
     }
 
     public List<Submission> getSubmissions(String milestoneId) {
+        getMilestone(milestoneId);
         return submissionRepo.findByMilestoneIdOrderByCreatedAtDesc(milestoneId);
     }
 
@@ -165,12 +170,12 @@ public class MilestoneService {
     }
 
     /**
-     * Authorised milestone payout/release workflow.
+     * Authorized milestone payout/release workflow.
      * Enforces required conditions:
      * 1. Milestone must be in ACCEPTED state.
      * 2. A CAPTURED payment must exist for the milestone (no release without verified funds).
-     * 3. Uses PayPal Payouts API if enabled, or visibly labelled DEMO_SIMULATED status.
-     * 4. Records an auditable timeline event with safe JSON built via ObjectMapper.
+     * 3. Idempotent: checks for existing payout record before initiating a new release.
+     * 4. Provider distinction: a DEMO_ESCROW payment produces a DEMO_SIMULATED payout status.
      */
     @Transactional
     public Map<String, Object> releaseMilestone(String milestoneId, String actorId, String recipientEmail) {
@@ -179,166 +184,116 @@ public class MilestoneService {
             throw new IllegalStateException("Milestone cannot be released unless it is in ACCEPTED status. Current: " + m.getStatus());
         }
 
+        // Idempotency check: return existing payout if already released
+        Optional<Payout> existingPayout = payoutRepo.findByMilestoneId(milestoneId);
+        if (existingPayout.isPresent()) {
+            Payout p = existingPayout.get();
+            log.info("Milestone {} already released with payout batch {}", milestoneId, p.getPayoutBatchId());
+            Map<String, Object> resp = new HashMap<>();
+            resp.put("milestoneId", milestoneId);
+            resp.put("amount", p.getAmount());
+            resp.put("currency", p.getCurrency());
+            resp.put("recipient", p.getRecipientEmail());
+            resp.put("payoutBatchId", p.getPayoutBatchId());
+            resp.put("payoutStatus", p.getStatus());
+            resp.put("isSimulated", p.isSimulated());
+            resp.put("provider", p.getProvider());
+            resp.put("alreadyReleased", true);
+            resp.put("message", "Milestone payout has already been released (idempotent result).");
+            return resp;
+        }
+
         // Require a captured payment before releasing funds
-        boolean hasCapturedPayment = paymentRepo.findByMilestoneId(milestoneId).stream()
-                .anyMatch(p -> p.getStatus() == Payment.PaymentStatus.CAPTURED);
-        if (!hasCapturedPayment) {
+        List<Payment> payments = paymentRepo.findByMilestoneId(milestoneId);
+        List<Payment> capturedPayments = payments.stream()
+                .filter(p -> p.getStatus() == Payment.PaymentStatus.CAPTURED)
+                .toList();
+
+        if (capturedPayments.isEmpty()) {
             throw new IllegalStateException("Cannot release milestone: no captured payment found for milestone " + milestoneId + ". Fund the milestone via PayPal before releasing.");
         }
 
-        Project project = projectService.getProject(m.getProjectId());
-        String effectiveRecipient = recipientEmail != null && !recipientEmail.isBlank()
-                ? recipientEmail : project.getFreelancerName() + "@example.com";
+        // Check if funded via DEMO_ESCROW
+        boolean isDemoEscrow = capturedPayments.stream()
+                .allMatch(p -> "DEMO_ESCROW".equalsIgnoreCase(p.getProvider()));
 
-        PayPalService.PayoutResult result = paypalService.createPayout(
-                milestoneId,
-                effectiveRecipient,
-                m.getAmount() != null ? m.getAmount() : java.math.BigDecimal.ZERO,
-                m.getCurrency() != null ? m.getCurrency() : "USD",
-                "Milestone release for: " + m.getTitle()
-        );
+        Project project = projectService.getProject(m.getProjectId());
+        String effectiveRecipient = (recipientEmail != null && !recipientEmail.isBlank())
+                ? recipientEmail : project.getFreelancerName().toLowerCase().replace(" ", "") + "@example.com";
+
+        BigDecimal releaseAmount = m.getAmount() != null ? m.getAmount() : BigDecimal.ZERO;
+        String releaseCurrency = m.getCurrency() != null ? m.getCurrency() : "USD";
+        String idempotencyKey = "payout-" + milestoneId;
+
+        PayPalService.PayoutResult payoutResult;
+        String effectiveProvider;
+
+        if (isDemoEscrow) {
+            // Simulated payment produces transparent simulated release
+            payoutResult = new PayPalService.PayoutResult(
+                    "sim-demo-" + milestoneId.substring(0, Math.min(milestoneId.length(), 8)),
+                    "DEMO_SIMULATED",
+                    true,
+                    "Simulated release: Payment was funded via Simulated Milestone Deposit (DEMO_ESCROW)."
+            );
+            effectiveProvider = "DEMO_ESCROW";
+        } else {
+            payoutResult = paypalService.createPayout(
+                    milestoneId,
+                    effectiveRecipient,
+                    releaseAmount,
+                    releaseCurrency,
+                    "Milestone release for: " + m.getTitle(),
+                    idempotencyKey
+            );
+            effectiveProvider = payoutResult.isSimulated() ? "PAYPAL_SIMULATED" : "PAYPAL";
+        }
+
+        // Persist Payout entity for unique constraint and idempotency
+        Payout payout = Payout.builder()
+                .milestoneId(milestoneId)
+                .projectId(m.getProjectId())
+                .recipientEmail(effectiveRecipient)
+                .amount(releaseAmount)
+                .currency(releaseCurrency)
+                .payoutBatchId(payoutResult.batchId())
+                .idempotencyKey(idempotencyKey)
+                .status(payoutResult.status())
+                .simulated(payoutResult.isSimulated())
+                .provider(effectiveProvider)
+                .releasedAt(Instant.now())
+                .build();
+        payoutRepo.save(payout);
 
         try {
             ObjectNode meta = objectMapper.createObjectNode();
-            meta.put("batchId", result.batchId());
-            meta.put("status", result.status());
-            meta.put("isSimulated", result.isSimulated());
+            meta.put("batchId", payoutResult.batchId());
+            meta.put("status", payoutResult.status());
+            meta.put("isSimulated", payoutResult.isSimulated());
+            meta.put("provider", effectiveProvider);
+            meta.put("idempotencyKey", idempotencyKey);
             projectService.audit(m.getProjectId(), actorId, actorId,
-                    "MILESTONE_PAYOUT_RELEASED", "Milestone", milestoneId, objectMapper.writeValueAsString(meta));
+                    "MILESTONE_PAYOUT_RELEASED", "Milestone", milestoneId, meta.toString());
         } catch (Exception e) {
             log.warn("Failed to write audit JSON for milestone release", e);
         }
 
         Map<String, Object> resp = new HashMap<>();
         resp.put("milestoneId", milestoneId);
-        resp.put("amount", m.getAmount());
-        resp.put("currency", m.getCurrency());
+        resp.put("amount", releaseAmount);
+        resp.put("currency", releaseCurrency);
         resp.put("recipient", effectiveRecipient);
-        resp.put("payoutBatchId", result.batchId());
-        resp.put("payoutStatus", result.status());
-        resp.put("isSimulated", result.isSimulated());
-        resp.put("message", result.message());
+        resp.put("payoutBatchId", payoutResult.batchId());
+        resp.put("payoutStatus", payoutResult.status());
+        resp.put("isSimulated", payoutResult.isSimulated());
+        resp.put("provider", effectiveProvider);
+        resp.put("alreadyReleased", false);
+        resp.put("message", payoutResult.message());
         return resp;
     }
 
     /**
-     * Refunds milestone escrow back to the client.
-     */
-    @Transactional
-    public Milestone refundMilestoneEscrow(String milestoneId, String actorId, String reason) {
-        Milestone m = getMilestone(milestoneId);
-        m.setStatus(Milestone.MilestoneStatus.NOT_STARTED);
-        m.setUpdatedAt(Instant.now());
-        m = milestoneRepo.save(m);
-        projectService.audit(m.getProjectId(), actorId, actorId,
-                "MILESTONE_ESCROW_REFUNDED", "Milestone", milestoneId,
-                "{\"amount\":" + m.getAmount() + ",\"reason\":\"" + (reason != null ? reason.replace("\"", "'") : "Escrow refunded to client") + "\"}");
-        return m;
-    }
-
-    /**
-     * Resolves an open milestone dispute by mutual agreement.
-     */
-    @Transactional
-    public Map<String, Object> resolveDispute(String milestoneId, String actorId, String resolution, String note) {
-        Milestone m = getMilestone(milestoneId);
-        String finalStatus = "RESOLVED";
-        if ("release".equalsIgnoreCase(resolution)) {
-            m.setStatus(Milestone.MilestoneStatus.ACCEPTED);
-            finalStatus = "RELEASED_TO_FREELANCER";
-        } else if ("refund".equalsIgnoreCase(resolution)) {
-            m.setStatus(Milestone.MilestoneStatus.NOT_STARTED);
-            finalStatus = "REFUNDED_TO_CLIENT";
-        } else if ("split".equalsIgnoreCase(resolution)) {
-            m.setStatus(Milestone.MilestoneStatus.ACCEPTED);
-            finalStatus = "MUTUAL_SPLIT_50_50";
-        }
-        m.setUpdatedAt(Instant.now());
-        milestoneRepo.save(m);
-
-        projectService.audit(m.getProjectId(), actorId, actorId,
-                "DISPUTE_MUTUALLY_RESOLVED", "Milestone", milestoneId,
-                "{\"resolution\":\"" + resolution + "\",\"note\":\"" + (note != null ? note.replace("\"", "'") : "") + "\"}");
-
-        return Map.of(
-            "milestoneId", milestoneId,
-            "status", finalStatus,
-            "resolution", resolution,
-            "note", note != null ? note : "",
-            "message", "Dispute successfully settled by mutual consent: " + resolution
-        );
-    }
-
-    // objectMapper is declared in the field block above
-
-    /**
-     * AI Dispute Mediation: Evaluates disagreement and submitted evidence via Gemini to provide an advisory compromise.
-     */
-    public Map<String, Object> aiMediateDispute(String milestoneId) {
-        Milestone m = getMilestone(milestoneId);
-        BigDecimal amount = m.getAmount() != null ? m.getAmount() : BigDecimal.ZERO;
-
-        // Retrieve latest submission description & evidence
-        List<Submission> submissions = submissionRepo.findByMilestoneIdOrderByCreatedAtDesc(m.getId());
-        String submissionSummary = submissions.isEmpty() ? null : submissions.get(0).getDescription();
-        String evidenceLinks = submissions.isEmpty() ? null : submissions.get(0).getEvidenceLinks();
-
-        // Retrieve disagreement reason from project audit timeline
-        List<AuditEvent> timeline = projectService.getTimeline(m.getProjectId());
-        String disagreementReason = timeline.stream()
-                .filter(e -> "MILESTONE_DISAGREEMENT_FLAGGED".equals(e.getEventType()))
-                .filter(e -> e.getEntityId() != null && e.getEntityId().equals(m.getId()))
-                .reduce((first, second) -> second)
-                .map(AuditEvent::getSafeMetadata)
-                .orElse("Client flagged milestone disagreement");
-
-        String mediationJson = aiService.mediateDispute(
-                m.getTitle(),
-                amount,
-                m.getAcceptanceCriteria(),
-                submissionSummary,
-                evidenceLinks,
-                disagreementReason
-        );
-
-        Map<String, Object> mediation;
-        try {
-            mediation = objectMapper.readValue(mediationJson, Map.class);
-            if (mediation.get("amount") != null) {
-                mediation.put("amount", new BigDecimal(mediation.get("amount").toString()));
-            }
-            if (mediation.get("recommendedSplitClient") != null) {
-                mediation.put("recommendedSplitClient", new BigDecimal(mediation.get("recommendedSplitClient").toString()));
-            }
-            if (mediation.get("recommendedSplitFreelancer") != null) {
-                mediation.put("recommendedSplitFreelancer", new BigDecimal(mediation.get("recommendedSplitFreelancer").toString()));
-            }
-        } catch (Exception e) {
-            log.warn("Failed to parse Gemini mediation JSON, falling back to rule-based mediation: {}", e.getMessage());
-            BigDecimal half = amount.divide(BigDecimal.valueOf(2));
-            mediation = new HashMap<>();
-            mediation.put("milestoneTitle", m.getTitle());
-            mediation.put("amount", amount);
-            mediation.put("analysis", "Based on the criteria and work submitted, core frontend frames and responsive layouts were delivered, but 1 criterion required minor adjustments. A balanced compromise protects both parties' investment.");
-            mediation.put("recommendedResolution", "MUTUAL_SPLIT_50_50");
-            mediation.put("recommendedSplitClient", half);
-            mediation.put("recommendedSplitFreelancer", half);
-            mediation.put("alternativeOption", "Grant a 4-day revision window for the freelancer to address missing criteria.");
-            mediation.put("advisoryNote", "AI Dispute Mediation provides neutral advisory recommendations. Escrow release or refund requires party authorization.");
-        }
-
-        mediation.put("liveAi", aiService.isLastCallLive());
-        mediation.put("aiModel", aiService.isLastCallLive() ? "gemini-3.8-flash (live)" : "demo-mode");
-
-        projectService.audit(m.getProjectId(), "AI_MEDIATOR", "AI Dispute Mediator",
-                "DISPUTE_AI_MEDIATION_GENERATED", "Milestone", m.getId(),
-                "{\"recommendation\":\"" + mediation.get("recommendedResolution") + "\",\"live\":" + aiService.isLastCallLive() + "}");
-
-        return mediation;
-    }
-
-    /**
-     * Organises all project agreement terms, contract versions, milestones, evidence,
+     * Organizes project agreement terms, contract versions, milestones, evidence,
      * AI acceptance reports, and audit logs into a unified dispute/evidence pack.
      */
     public Map<String, Object> getDisputePack(String milestoneId) {
@@ -346,11 +301,13 @@ public class MilestoneService {
         Project project = projectService.getProject(m.getProjectId());
         List<Submission> submissions = getSubmissions(milestoneId);
         List<AuditEvent> timeline = projectService.getTimeline(m.getProjectId());
+        List<Payment> payments = paymentRepo.findByMilestoneId(milestoneId);
 
         Map<String, Object> pack = new HashMap<>();
         pack.put("project", project);
         pack.put("milestone", m);
         pack.put("submissions", submissions);
+        pack.put("payments", payments);
         pack.put("auditTimeline", timeline);
         pack.put("generatedAt", Instant.now().toString());
         pack.put("disclaimer", "ChatEscrow Evidence Package: Assembled for transparency and human dispute resolution. Not legal advice.");

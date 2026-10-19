@@ -1,7 +1,10 @@
 package com.chatescrow.backend.service;
 
+import com.chatescrow.backend.exception.ResourceNotFoundException;
 import com.chatescrow.backend.model.*;
 import com.chatescrow.backend.repository.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -18,13 +21,11 @@ public class ProjectService {
     private final ProjectRepository projectRepo;
     private final MilestoneRepository milestoneRepo;
     private final AuditEventRepository auditRepo;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public String resolveProjectId(String id) {
-        if (id == null || id.isBlank() || "demo-project-001".equals(id)) {
-            return projectRepo.findAll().stream()
-                    .map(Project::getId)
-                    .findFirst()
-                    .orElse(id);
+        if (id == null || id.isBlank()) {
+            throw new IllegalArgumentException("Project ID is required");
         }
         return id;
     }
@@ -34,10 +35,11 @@ public class ProjectService {
     }
 
     public Project getProject(String id) {
-        String resolved = resolveProjectId(id);
-        return projectRepo.findById(resolved)
-                .or(() -> projectRepo.findAll().stream().findFirst())
-                .orElseThrow(() -> new RuntimeException("Project not found: " + id));
+        if (id == null || id.isBlank()) {
+            throw new ResourceNotFoundException("Project ID is required");
+        }
+        return projectRepo.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Project not found: " + id));
     }
 
     @Transactional
@@ -55,22 +57,23 @@ public class ProjectService {
                 .updatedAt(Instant.now())
                 .build();
         p = projectRepo.save(p);
-        audit(p.getId(), "system", "System", "PROJECT_CREATED", "Project", p.getId(),
-                "{\"title\":\"" + title + "\"}");
+
+        ObjectNode meta = objectMapper.createObjectNode();
+        meta.put("title", title);
+        audit(p.getId(), "system", "System", "PROJECT_CREATED", "Project", p.getId(), meta.toString());
         return p;
     }
 
     public List<Milestone> getMilestones(String projectId) {
-        String resolved = resolveProjectId(projectId);
-        return milestoneRepo.findByProjectIdOrderByCreatedAt(resolved);
+        getProject(projectId); // validate exists
+        return milestoneRepo.findByProjectIdOrderByCreatedAt(projectId);
     }
 
     @Transactional
     public Milestone createMilestone(String projectId, String title, BigDecimal amount,
                                       String dueDate, String deliverables, String criteria,
                                       String description, String contractVersionId) {
-        String resolved = resolveProjectId(projectId);
-        getProject(resolved); // validate exists
+        getProject(projectId); // validate exists
         java.time.LocalDate parsedDueDate = null;
         if (dueDate != null && !dueDate.isBlank()) {
             try {
@@ -78,7 +81,7 @@ public class ProjectService {
             } catch (Exception ignored) {}
         }
         Milestone m = Milestone.builder()
-                .projectId(resolved)
+                .projectId(projectId)
                 .contractVersionId(contractVersionId)
                 .title(title)
                 .amount(amount)
@@ -91,21 +94,22 @@ public class ProjectService {
                 .updatedAt(Instant.now())
                 .build();
         m = milestoneRepo.save(m);
-        audit(resolved, "system", "System", "MILESTONE_CREATED", "Milestone", m.getId(),
-                "{\"title\":\"" + title + "\"}");
+
+        ObjectNode meta = objectMapper.createObjectNode();
+        meta.put("title", title);
+        audit(projectId, "system", "System", "MILESTONE_CREATED", "Milestone", m.getId(), meta.toString());
         return m;
     }
 
     public List<AuditEvent> getTimeline(String projectId) {
-        String resolved = resolveProjectId(projectId);
-        return auditRepo.findByProjectIdOrderByCreatedAtDesc(resolved);
+        getProject(projectId);
+        return auditRepo.findByProjectIdOrderByCreatedAtDesc(projectId);
     }
 
     public void audit(String projectId, String actorId, String actorName,
                       String eventType, String entityType, String entityId, String meta) {
-        String resolved = resolveProjectId(projectId);
         auditRepo.save(AuditEvent.builder()
-                .projectId(resolved)
+                .projectId(projectId)
                 .actorId(actorId)
                 .actorName(actorName)
                 .eventType(eventType)

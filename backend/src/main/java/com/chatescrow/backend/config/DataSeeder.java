@@ -24,6 +24,7 @@ public class DataSeeder implements CommandLineRunner {
     private final MilestoneRepository milestoneRepo;
     private final AuditEventRepository auditRepo;
     private final PaymentRepository paymentRepo;
+    private final SubmissionRepository submissionRepo;
 
     @Override
     public void run(String... args) {
@@ -141,6 +142,17 @@ public class DataSeeder implements CommandLineRunner {
                 .updatedAt(Instant.parse("2025-08-22T17:02:00Z"))
                 .build());
 
+        // Demo submission for m2
+        submissionRepo.save(Submission.builder()
+                .id("demo-submission-frontend")
+                .milestoneId(m2.getId())
+                .submittedBy("Alex Carter (Freelancer)")
+                .description("Completed responsive storefront with all 8 Figma frames, product catalog grid, cart drawer, and responsive checkout integration.")
+                .evidenceLinks("https://preview.northandpine.store, https://github.com/alexcarter/north-pine-storefront")
+                .fileReferences("lighthouse-report.pdf")
+                .createdAt(Instant.parse("2025-08-25T09:18:00Z"))
+                .build());
+
         // Demo payment (design milestone captured)
         paymentRepo.save(Payment.builder()
                 .id("demo-payment-design")
@@ -158,7 +170,7 @@ public class DataSeeder implements CommandLineRunner {
                 .build());
 
         // Demo audit trail
-        auditRepo.save(AuditEvent.builder().projectId(project.getId()).actorName("System").eventType("PROJECT_CREATED").entityType("Project").entityId(project.getId()).safeMetadata("{}").createdAt(Instant.parse("2025-08-12T09:00:00Z")).build());
+        auditRepo.save(AuditEvent.builder().projectId(project.getId()).actorName("System").eventType("PROJECT_CREATED").entityType("Project").entityId(project.getId()).safeMetadata("{\"title\":\"E-commerce Website Development\"}").createdAt(Instant.parse("2025-08-12T09:00:00Z")).build());
         auditRepo.save(AuditEvent.builder().projectId(project.getId()).actorName("AI").eventType("CONTRACT_DRAFT_GENERATED").entityType("ContractVersion").entityId(contract.getId()).safeMetadata("{\"version\":1,\"aiGenerated\":true}").createdAt(Instant.parse("2025-08-12T10:00:00Z")).build());
         auditRepo.save(AuditEvent.builder().projectId(project.getId()).actorName("client").eventType("CONTRACT_APPROVED_BY_CLIENT").entityType("ContractVersion").entityId(contract.getId()).safeMetadata("{\"role\":\"client\"}").createdAt(Instant.parse("2025-08-12T11:00:00Z")).build());
         auditRepo.save(AuditEvent.builder().projectId(project.getId()).actorName("freelancer").eventType("CONTRACT_APPROVED_BY_FREELANCER").entityType("ContractVersion").entityId(contract.getId()).safeMetadata("{\"role\":\"freelancer\"}").createdAt(Instant.parse("2025-08-12T11:30:00Z")).build());

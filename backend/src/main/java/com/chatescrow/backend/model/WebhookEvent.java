@@ -21,5 +21,5 @@ public class WebhookEvent {
     private String processingResult;
     private Instant createdAt = Instant.now();
 
-    public enum VerificationStatus { PENDING, VERIFIED, FAILED, SKIPPED }
+    public enum VerificationStatus { PENDING, VERIFIED, FAILED, SKIPPED, SIMULATED }
 }

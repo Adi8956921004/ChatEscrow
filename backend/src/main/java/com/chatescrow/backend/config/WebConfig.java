@@ -24,10 +24,9 @@ public class WebConfig {
         List<String> origins = Arrays.asList(allowedOriginsStr.split(","));
         config.setAllowedOrigins(origins);
         config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("*"));
-        config.setAllowCredentials(true);
+        config.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "X-Actor-Role", "X-Actor-Id", "PayPal-Request-Id"));
+        config.setAllowCredentials(false);
         source.registerCorsConfiguration("/api/**", config);
-        source.registerCorsConfiguration("/h2-console/**", config);
         return new CorsFilter(source);
     }
 

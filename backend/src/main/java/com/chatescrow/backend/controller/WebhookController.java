@@ -1,24 +1,27 @@
 package com.chatescrow.backend.controller;
 
+import com.chatescrow.backend.model.Payment;
 import com.chatescrow.backend.model.WebhookEvent;
+import com.chatescrow.backend.repository.PaymentRepository;
 import com.chatescrow.backend.repository.WebhookEventRepository;
 import com.chatescrow.backend.paypal.PayPalService;
-import com.chatescrow.backend.repository.PaymentRepository;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * PayPal Webhook receiver.
  * Verifies webhook signatures using the official PayPal verification API.
- * Duplicates are rejected; events without verified signatures are stored as FAILED/SKIPPED
- * and do not trigger financial actions.
+ * Updates payment states on verified capture completion/denial idempotently.
+ * Catches race conditions on deduplication.
  */
 @RestController
 @RequestMapping("/api/webhooks")
@@ -53,27 +56,34 @@ public class WebhookController {
         // Step 2: Extract event metadata from payload
         String eventType = "UNKNOWN";
         String eventId = null;
+        JsonNode payloadNode = null;
         try {
-            JsonNode payloadNode = objectMapper.readTree(rawPayload);
+            payloadNode = objectMapper.readTree(rawPayload);
             eventType = payloadNode.path("event_type").asText("UNKNOWN");
-            // Use stable event ID from PayPal payload body (not transmission ID which changes on retries)
             eventId = payloadNode.path("id").asText(null);
         } catch (Exception ignored) {}
 
-        // Step 3: Deduplicate on event ID (stable across retries)
+        // Step 3: Deduplicate on event ID
         String stableId = eventId != null ? eventId : (transmissionId != null ? transmissionId : "evt-" + Instant.now().toEpochMilli());
         if (webhookRepo.findByProviderEventId(stableId).isPresent()) {
             log.warn("Duplicate webhook event ignored (eventId={})", stableId);
             return ResponseEntity.ok(Map.of("status", "duplicate_ignored"));
         }
 
-        // Step 4: Only process financial actions for VERIFIED events
+        // Step 4: Handle payment state updates for VERIFIED events
         String processingResult = "STORED_UNVERIFIED";
         if (status == WebhookEvent.VerificationStatus.VERIFIED) {
             processingResult = "PROCESSED_VERIFIED";
             log.info("Webhook event verified successfully: type={}, eventId={}", eventType, stableId);
+
+            if (payloadNode != null) {
+                try {
+                    handlePaymentWebhookEvent(eventType, payloadNode);
+                } catch (Exception ex) {
+                    log.error("Failed to update payment state for webhook {}: {}", stableId, ex.getMessage());
+                }
+            }
         } else if (status == WebhookEvent.VerificationStatus.FAILED) {
-            // Failed verification: store for audit but do NOT trigger any financial action
             log.warn("Webhook signature verification FAILED: type={}, transmissionId={} — stored for audit only", eventType, transmissionId);
             processingResult = "STORED_VERIFICATION_FAILED";
         } else {
@@ -90,13 +100,51 @@ public class WebhookController {
                 .createdAt(Instant.now())
                 .build();
 
-        webhookRepo.save(event);
+        try {
+            webhookRepo.save(event);
+        } catch (DataIntegrityViolationException ex) {
+            log.warn("Concurrent duplicate webhook caught by unique constraint: {}", stableId);
+            return ResponseEntity.ok(Map.of("status", "duplicate_ignored"));
+        }
 
         return ResponseEntity.ok(Map.of(
                 "status", "received",
                 "verificationStatus", status.name(),
                 "eventType", eventType
         ));
+    }
+
+    private void handlePaymentWebhookEvent(String eventType, JsonNode payloadNode) {
+        JsonNode resource = payloadNode.path("resource");
+        String captureId = resource.path("id").asText(null);
+        String orderId = resource.path("supplementary_data").path("related_ids").path("order_id").asText(null);
+
+        Optional<Payment> targetPayment = Optional.empty();
+        if (captureId != null) {
+            targetPayment = paymentRepo.findByProviderCaptureId(captureId);
+        }
+        if (targetPayment.isEmpty() && orderId != null) {
+            targetPayment = paymentRepo.findByProviderOrderId(orderId);
+        }
+
+        if (targetPayment.isPresent()) {
+            Payment payment = targetPayment.get();
+            if ("PAYMENT.CAPTURE.COMPLETED".equalsIgnoreCase(eventType)) {
+                payment.setStatus(Payment.PaymentStatus.CAPTURED);
+                if (captureId != null) {
+                    payment.setProviderCaptureId(captureId);
+                }
+                payment.setVerifiedAt(Instant.now());
+                payment.setUpdatedAt(Instant.now());
+                paymentRepo.save(payment);
+                log.info("Payment {} updated to CAPTURED via webhook event {}", payment.getId(), eventType);
+            } else if ("PAYMENT.CAPTURE.DENIED".equalsIgnoreCase(eventType)) {
+                payment.setStatus(Payment.PaymentStatus.FAILED);
+                payment.setUpdatedAt(Instant.now());
+                paymentRepo.save(payment);
+                log.info("Payment {} updated to FAILED via webhook event {}", payment.getId(), eventType);
+            }
+        }
     }
 
     @GetMapping("/events")
@@ -112,10 +160,10 @@ public class WebhookController {
         WebhookEvent event = WebhookEvent.builder()
                 .providerEventId(customId)
                 .eventType(eventType)
-                .verificationStatus(WebhookEvent.VerificationStatus.VERIFIED)
+                .verificationStatus(WebhookEvent.VerificationStatus.SIMULATED)
                 .rawPayload("{\"id\":\"" + customId + "\",\"event_type\":\"" + eventType + "\",\"summary\":\"Simulated Sandbox Webhook Event\",\"create_time\":\"" + Instant.now() + "\"}")
                 .processedAt(Instant.now())
-                .processingResult("SIMULATED_VERIFIED")
+                .processingResult("SIMULATED")
                 .createdAt(Instant.now())
                 .build();
         webhookRepo.save(event);

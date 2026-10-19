@@ -5,11 +5,14 @@ import {
   reviewFindings,
   statusLabel,
   paymentStatusLabel,
+  setActorRole,
+  getActorRole,
   getProjects,
   getMilestones,
   createMilestone,
   getContractVersions,
   generateDraft,
+  saveDraft,
   approveContract,
   submitEvidence,
   getSubmissions,
@@ -24,9 +27,6 @@ import {
   depositDemoEscrow,
   getProjectPayments,
   refundPayment,
-  refundMilestone,
-  resolveDispute,
-  getAiMediation,
   getWebhookEvents,
   simulateWebhook,
   getTimeline,
@@ -50,39 +50,40 @@ type IconName =
   | "menu" | "x" | "link" | "warning" | "info" | "refresh" | "paypal"
   | "trash" | "download" | "lock" | "scale"
 
+const ICON_PATHS: Record<IconName, ReactNode> = {
+  grid: <><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" /><rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></>,
+  spark: <path d="m12 3 1.4 4.1a5.5 5.5 0 0 0 3.5 3.5L21 12l-4.1 1.4a5.5 5.5 0 0 0-3.5 3.5L12 21l-1.4-4.1a5.5 5.5 0 0 0-3.5-3.5L3 12l4.1-1.4a5.5 5.5 0 0 0 3.5-3.5L12 3Z" />,
+  file: <><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v5h5M9 13h6M9 17h5" /></>,
+  search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></>,
+  bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></>,
+  plus: <path d="M12 5v14M5 12h14" />,
+  arrow: <><path d="M5 12h14M14 7l5 5-5 5" /></>,
+  wallet: <><path d="M3 6h16v13H3zM3 9h16" /><path d="M16 14h.01" /></>,
+  clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
+  check: <path d="m5 12 4 4L19 6" />,
+  trend: <><path d="m4 16 5-5 4 4 7-8" /><path d="M15 7h5v5" /></>,
+  upload: <><path d="M12 16V4M7 9l5-5 5 5" /><path d="M5 20h14" /></>,
+  calendar: <><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M7 3v4M17 3v4M3 10h18" /></>,
+  users: <><circle cx="9" cy="8" r="3" /><path d="M3 20c0-4 2-6 6-6s6 2 6 6M16 5a3 3 0 0 1 0 6M17 14c3 .4 4 2.4 4 6" /></>,
+  shield: <><path d="M12 3 20 6v5c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6z" /><path d="m8 12 3 3 5-6" /></>,
+  edit: <><path d="m14 5 5 5M4 20l3.5-.8L20 6.7 17.3 4 4.8 16.5z" /></>,
+  chevron: <path d="m9 18 6-6-6-6" />,
+  message: <path d="M4 5h16v12H9l-5 4z" />,
+  external: <><path d="M14 4h6v6M20 4l-9 9" /><path d="M18 13v7H4V6h7" /></>,
+  menu: <path d="M4 7h16M4 12h16M4 17h16" />,
+  x: <path d="m6 6 12 12M18 6 6 18" />,
+  link: <><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></>,
+  warning: <><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></>,
+  info: <><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></>,
+  refresh: <><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" /></>,
+  paypal: <><path d="M7 11.5C7 9 9 7 11.5 7H16c2.5 0 4 1.5 4 3.5 0 3-2.5 4.5-5 4.5h-2l-1 5H8l1-8.5z" /><path d="M4 16.5C4 14 6 12 8.5 12H13c2.5 0 4 1.5 4 3.5 0 3-2.5 4.5-5 4.5H9l-1 4H4l1-7z" /></>,
+  trash: <><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6" /></>,
+  download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></>,
+  lock: <><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>,
+  scale: <><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" /><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" /><path d="M7 21h10" /><path d="M12 3v18" /><path d="M3 7h18" /></>,
+}
+
 function Icon({ name, size = "md" }: { name: IconName; size?: "sm" | "md" | "lg" }) {
-  const paths: Record<IconName, ReactNode> = {
-    grid: <><rect x="3" y="3" width="7" height="7" rx="2" /><rect x="14" y="3" width="7" height="7" rx="2" /><rect x="3" y="14" width="7" height="7" rx="2" /><rect x="14" y="14" width="7" height="7" rx="2" /></>,
-    spark: <path d="m12 3 1.4 4.1a5.5 5.5 0 0 0 3.5 3.5L21 12l-4.1 1.4a5.5 5.5 0 0 0-3.5 3.5L12 21l-1.4-4.1a5.5 5.5 0 0 0-3.5-3.5L3 12l4.1-1.4a5.5 5.5 0 0 0 3.5-3.5L12 3Z" />,
-    file: <><path d="M6 3h8l4 4v14H6z" /><path d="M14 3v5h5M9 13h6M9 17h5" /></>,
-    search: <><circle cx="11" cy="11" r="7" /><path d="m20 20-4-4" /></>,
-    bell: <><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4" /></>,
-    plus: <path d="M12 5v14M5 12h14" />,
-    arrow: <><path d="M5 12h14M14 7l5 5-5 5" /></>,
-    wallet: <><path d="M3 6h16v13H3zM3 9h16" /><path d="M16 14h.01" /></>,
-    clock: <><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>,
-    check: <path d="m5 12 4 4L19 6" />,
-    trend: <><path d="m4 16 5-5 4 4 7-8" /><path d="M15 7h5v5" /></>,
-    upload: <><path d="M12 16V4M7 9l5-5 5 5" /><path d="M5 20h14" /></>,
-    calendar: <><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M7 3v4M17 3v4M3 10h18" /></>,
-    users: <><circle cx="9" cy="8" r="3" /><path d="M3 20c0-4 2-6 6-6s6 2 6 6M16 5a3 3 0 0 1 0 6M17 14c3 .4 4 2.4 4 6" /></>,
-    shield: <><path d="M12 3 20 6v5c0 5-3.4 8.4-8 10-4.6-1.6-8-5-8-10V6z" /><path d="m8 12 3 3 5-6" /></>,
-    edit: <><path d="m14 5 5 5M4 20l3.5-.8L20 6.7 17.3 4 4.8 16.5z" /></>,
-    chevron: <path d="m9 18 6-6-6-6" />,
-    message: <path d="M4 5h16v12H9l-5 4z" />,
-    external: <><path d="M14 4h6v6M20 4l-9 9" /><path d="M18 13v7H4V6h7" /></>,
-    menu: <path d="M4 7h16M4 12h16M4 17h16" />,
-    x: <path d="m6 6 12 12M18 6 6 18" />,
-    link: <><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></>,
-    warning: <><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" /></>,
-    info: <><circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" /></>,
-    refresh: <><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" /><path d="M21 3v5h-5" /><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" /><path d="M8 16H3v5" /></>,
-    paypal: <><path d="M7 11.5C7 9 9 7 11.5 7H16c2.5 0 4 1.5 4 3.5 0 3-2.5 4.5-5 4.5h-2l-1 5H8l1-8.5z" /><path d="M4 16.5C4 14 6 12 8.5 12H13c2.5 0 4 1.5 4 3.5 0 3-2.5 4.5-5 4.5H9l-1 4H4l1-7z" /></>,
-    trash: <><path d="M3 6h18M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2M10 11v6M14 11v6" /></>,
-    download: <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" y1="15" x2="12" y2="3" /></>,
-    lock: <><rect x="3" y="11" width="18" height="11" rx="2" /><path d="M7 11V7a5 5 0 0 1 10 0v4" /></>,
-    scale: <><path d="m16 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" /><path d="m2 16 3-8 3 8c-.87.65-1.92 1-3 1s-2.13-.35-3-1Z" /><path d="M7 21h10" /><path d="M12 3v18" /><path d="M3 7h18" /></>,
-  }
   return (
     <svg
       className={size === "lg" ? "size-6" : size === "sm" ? "size-4" : "size-5"}
@@ -94,7 +95,7 @@ function Icon({ name, size = "md" }: { name: IconName; size?: "sm" | "md" | "lg"
       strokeLinejoin="round"
       aria-hidden="true"
     >
-      {paths[name]}
+      {ICON_PATHS[name]}
     </svg>
   )
 }
@@ -212,7 +213,7 @@ const navItems: { id: Screen; label: string; icon: IconName }[] = [
   { id: "webhooks", label: "Webhook Inspector", icon: "bell" },
 ]
 
-function Sidebar({ screen, setScreen, open, close }: { screen: Screen; setScreen: (s: Screen) => void; open: boolean; close: () => void }) {
+function Sidebar({ screen, setScreen, open, close, activeRole }: { screen: Screen; setScreen: (s: Screen) => void; open: boolean; close: () => void; activeRole: Role }) {
   return (
     <>
       {open && <div className="fixed inset-0 z-30 bg-overlay lg:hidden" onClick={close} />}
@@ -242,27 +243,26 @@ function Sidebar({ screen, setScreen, open, close }: { screen: Screen; setScreen
         <div className="relative mt-auto overflow-hidden rounded-[1.5rem] border border-white/10 bg-white/6 p-4 backdrop-blur">
           <div className="absolute -right-5 -top-7 size-20 rounded-full border border-accent/30" />
           <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-white/45">
-            <Icon name="shield" size="sm" /> 100% Fake Money / Sandbox
+            <Icon name="shield" size="sm" /> Milestone Protection
           </div>
-          <p className="text-xs leading-relaxed text-white/55">Payments and releases are simulated. No real funds are transferred or charged.</p>
+          <p className="text-xs leading-relaxed text-white/55">Server-verified ledger with PayPal sandbox integration.</p>
           <div className="mt-2 flex items-center gap-2">
-            <Badge tone="green"><span className="size-1.5 rounded-full bg-success" />Simulated Escrow</Badge>
+            <Badge tone="blue"><span className="size-1.5 rounded-full bg-primary" />Sandbox Mode</Badge>
           </div>
         </div>
         <div className="mt-4 flex items-center gap-3 border-t border-white/10 px-2 pt-4">
-          <Avatar initials="SM" />
+          <Avatar initials={activeRole === "client" ? "SM" : "AC"} dark={activeRole === "freelancer"} />
           <div className="min-w-0">
-            <p className="truncate text-sm font-bold text-white">Sarah Miller</p>
-            <p className="text-xs text-white/40">Demo Client account</p>
+            <p className="truncate text-sm font-bold text-white">{activeRole === "client" ? "Sarah Miller" : "Alex Carter"}</p>
+            <p className="text-xs text-white/40">{activeRole === "client" ? "Client Persona" : "Freelancer Persona"}</p>
           </div>
-          <span className="ml-auto text-white/30"><Icon name="chevron" size="sm" /></span>
         </div>
       </aside>
     </>
   )
 }
 
-function Topbar({ openMenu, screen }: { openMenu: () => void; screen: Screen }) {
+function Topbar({ openMenu, screen, activeRole, onSelectRole }: { openMenu: () => void; screen: Screen; activeRole: Role; onSelectRole: (r: Role) => void }) {
   const title = navItems.find((item) => item.id === screen)?.label
   return (
     <header className="sticky top-0 z-20 flex h-16 items-center justify-between bg-page/80 px-4 backdrop-blur-xl md:px-8">
@@ -270,8 +270,29 @@ function Topbar({ openMenu, screen }: { openMenu: () => void; screen: Screen }) 
         <button className="rounded-lg p-2 text-muted hover:bg-surface lg:hidden" onClick={openMenu} aria-label="Open navigation"><Icon name="menu" /></button>
         <p className="text-sm font-bold text-ink lg:hidden">{title}</p>
       </div>
+
+      {/* Role / Persona Switcher */}
+      <div className="flex items-center gap-1.5 rounded-xl border border-line bg-surface p-1">
+        <span className="text-[0.65rem] font-bold text-muted uppercase tracking-wider px-2 hidden sm:inline">Active View:</span>
+        <button
+          type="button"
+          onClick={() => onSelectRole("client")}
+          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition ${activeRole === "client" ? "bg-primary text-white shadow-sm" : "text-muted hover:text-ink hover:bg-surface-strong"}`}
+        >
+          <span className={`size-2 rounded-full ${activeRole === "client" ? "bg-white" : "bg-emerald-400"}`} />
+          Client (Sarah)
+        </button>
+        <button
+          type="button"
+          onClick={() => onSelectRole("freelancer")}
+          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition ${activeRole === "freelancer" ? "bg-primary text-white shadow-sm" : "text-muted hover:text-ink hover:bg-surface-strong"}`}
+        >
+          <span className={`size-2 rounded-full ${activeRole === "freelancer" ? "bg-white" : "bg-violet-400"}`} />
+          Freelancer (Alex)
+        </button>
+      </div>
+
       <div className="ml-auto flex items-center gap-2">
-        <Badge tone="green">Fake Money / Demo Mode</Badge>
         <Badge tone="blue">PayPal Sandbox</Badge>
         <button className="relative rounded-xl p-2.5 text-muted hover:bg-surface" aria-label="Notifications">
           <Icon name="bell" />

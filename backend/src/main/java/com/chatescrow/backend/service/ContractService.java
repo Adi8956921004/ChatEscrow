@@ -1,8 +1,11 @@
 package com.chatescrow.backend.service;
 
 import com.chatescrow.backend.ai.AiService;
+import com.chatescrow.backend.exception.ResourceNotFoundException;
 import com.chatescrow.backend.model.ContractVersion;
 import com.chatescrow.backend.repository.ContractVersionRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -18,16 +21,19 @@ public class ContractService {
     private final ContractVersionRepository contractRepo;
     private final AiService aiService;
     private final ProjectService projectService;
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     public List<ContractVersion> getContractVersions(String projectId) {
         String resolvedId = projectService.resolveProjectId(projectId);
+        projectService.getProject(resolvedId);
         return contractRepo.findByProjectIdOrderByVersionNumberDesc(resolvedId);
     }
 
     public ContractVersion getLatestVersion(String projectId) {
         String resolvedId = projectService.resolveProjectId(projectId);
+        projectService.getProject(resolvedId);
         return contractRepo.findTopByProjectIdOrderByVersionNumberDesc(resolvedId)
-                .orElseThrow(() -> new RuntimeException("No contract versions found for project: " + projectId));
+                .orElseThrow(() -> new ResourceNotFoundException("No contract versions found for project: " + projectId));
     }
 
     /**
@@ -37,7 +43,7 @@ public class ContractService {
     @Transactional
     public ContractVersion generateDraftFromConversation(String projectId, String conversationText) {
         String resolvedId = projectService.resolveProjectId(projectId);
-        projectService.getProject(resolvedId); // validate
+        projectService.getProject(resolvedId);
         int nextVersion = contractRepo.findByProjectIdOrderByVersionNumberDesc(resolvedId).size() + 1;
         String termsJson = aiService.extractContract(conversationText);
 
@@ -52,9 +58,12 @@ public class ContractService {
                 .build();
         cv = contractRepo.save(cv);
 
+        ObjectNode meta = objectMapper.createObjectNode();
+        meta.put("version", nextVersion);
+        meta.put("aiGenerated", aiService.isLastCallLive());
         projectService.audit(resolvedId, "system", "AI",
                 "CONTRACT_DRAFT_GENERATED", "ContractVersion", cv.getId(),
-                "{\"version\":" + nextVersion + ",\"aiGenerated\":true}");
+                meta.toString());
         log.info("Generated contract draft v{} for project {}", nextVersion, resolvedId);
         return cv;
     }
@@ -77,9 +86,12 @@ public class ContractService {
                 .createdAt(Instant.now())
                 .build();
         cv = contractRepo.save(cv);
+
+        ObjectNode meta = objectMapper.createObjectNode();
+        meta.put("version", nextVersion);
         projectService.audit(resolvedId, "user", "User",
                 "CONTRACT_DRAFT_SAVED", "ContractVersion", cv.getId(),
-                "{\"version\":" + nextVersion + "}");
+                meta.toString());
         return cv;
     }
 
@@ -90,7 +102,7 @@ public class ContractService {
     @Transactional
     public ContractVersion approveVersion(String versionId, String role) {
         ContractVersion cv = contractRepo.findById(versionId)
-                .orElseThrow(() -> new RuntimeException("Contract version not found: " + versionId));
+                .orElseThrow(() -> new ResourceNotFoundException("Contract version not found: " + versionId));
 
         if ("client".equalsIgnoreCase(role)) {
             cv.setClientApprovalStatus(ContractVersion.ApprovalStatus.APPROVED);
@@ -103,9 +115,14 @@ public class ContractService {
         }
 
         cv = contractRepo.save(cv);
+
+        ObjectNode meta = objectMapper.createObjectNode();
+        meta.put("role", role);
+        meta.put("agreed", cv.isAgreed());
+
         projectService.audit(cv.getProjectId(), role, role,
                 "CONTRACT_APPROVED_BY_" + role.toUpperCase(), "ContractVersion", versionId,
-                "{\"role\":\"" + role + "\",\"agreed\":" + cv.isAgreed() + "}");
+                meta.toString());
 
         if (cv.isAgreed()) {
             projectService.audit(cv.getProjectId(), "system", "System",
@@ -116,6 +133,6 @@ public class ContractService {
 
     public ContractVersion getVersion(String versionId) {
         return contractRepo.findById(versionId)
-                .orElseThrow(() -> new RuntimeException("Contract version not found: " + versionId));
+                .orElseThrow(() -> new ResourceNotFoundException("Contract version not found: " + versionId));
     }
 }

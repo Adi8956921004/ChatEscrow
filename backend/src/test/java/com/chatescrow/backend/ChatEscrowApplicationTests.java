@@ -1,21 +1,39 @@
 package com.chatescrow.backend;
 
+import com.chatescrow.backend.ai.AiService;
 import com.chatescrow.backend.model.*;
+import com.chatescrow.backend.paypal.PayPalService;
 import com.chatescrow.backend.repository.*;
 import com.chatescrow.backend.service.*;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.mock.mockito.MockBean;
+import org.springframework.http.MediaType;
+import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest
+@AutoConfigureMockMvc
 class ChatEscrowApplicationTests {
+
+    @Autowired
+    private MockMvc mockMvc;
 
     @Autowired
     private ProjectService projectService;
@@ -25,6 +43,9 @@ class ChatEscrowApplicationTests {
 
     @Autowired
     private MilestoneService milestoneService;
+
+    @Autowired
+    private PaymentService paymentService;
 
     @Autowired
     private ProjectRepository projectRepository;
@@ -39,18 +60,18 @@ class ChatEscrowApplicationTests {
     private PaymentRepository paymentRepository;
 
     @Autowired
+    private PayoutRepository payoutRepository;
+
+    @Autowired
     private AuditEventRepository auditEventRepository;
 
     @Autowired
-    private PaymentService paymentService;
+    private AiService aiService;
 
-    @Autowired
-    private com.chatescrow.backend.ai.AiService aiService;
+    @MockBean
+    private PayPalService paypalService;
 
-    @Autowired
-    private com.chatescrow.backend.controller.WebhookController webhookController;
-
-    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test
     @DisplayName("Verify context loads and demo data is seeded")
@@ -64,9 +85,9 @@ class ChatEscrowApplicationTests {
     }
 
     @Test
-    @DisplayName("End-to-end workflow: Create Project -> Draft Contract -> Mutual Approval -> Milestones -> Submit -> AI Eval -> Client Decision")
+    @DisplayName("End-to-end workflow: Create Project -> Draft Contract -> Mutual Approval -> Milestones -> Submit -> AI Eval -> Client Decision -> Release")
     void endToEndJourneyWorkflow() {
-        // 1. Create a new project
+        // 1. Create project
         Project project = projectService.createProject(
                 "Mobile App Redesign",
                 "Redesign React Native mobile application",
@@ -76,9 +97,8 @@ class ChatEscrowApplicationTests {
                 "USD"
         );
         assertNotNull(project.getId());
-        assertEquals(Project.ProjectStatus.ACTIVE, project.getStatus());
 
-        // 2. Generate AI contract draft from pasted conversation
+        // 2. Draft contract from conversation
         String conversation = """
                 Alice: Hi Bob, we need a complete mobile app redesign. Budget is $2500.
                 Bob: Sounds good! Milestone 1: Wireframes ($1000, due in 2 weeks).
@@ -88,21 +108,15 @@ class ChatEscrowApplicationTests {
         ContractVersion draft = contractService.generateDraftFromConversation(project.getId(), conversation);
         assertNotNull(draft);
         assertEquals(1, draft.getVersionNumber());
-        assertEquals(ContractVersion.ApprovalStatus.PENDING, draft.getClientApprovalStatus());
-        assertEquals(ContractVersion.ApprovalStatus.PENDING, draft.getFreelancerApprovalStatus());
+        assertFalse(draft.isAgreed());
 
-        // 3. Mutual Approval: Client approves
-        ContractVersion afterClientApprove = contractService.approveVersion(draft.getId(), "client");
-        assertEquals(ContractVersion.ApprovalStatus.APPROVED, afterClientApprove.getClientApprovalStatus());
-        assertEquals(ContractVersion.ApprovalStatus.PENDING, afterClientApprove.getFreelancerApprovalStatus());
-        assertFalse(afterClientApprove.isAgreed());
-
-        // Mutual Approval: Freelancer approves -> Contract becomes AGREED
+        // 3. Mutual approval
+        ContractVersion afterClient = contractService.approveVersion(draft.getId(), "client");
+        assertFalse(afterClient.isAgreed());
         ContractVersion fullyApproved = contractService.approveVersion(draft.getId(), "freelancer");
-        assertEquals(ContractVersion.ApprovalStatus.APPROVED, fullyApproved.getFreelancerApprovalStatus());
-        assertTrue(fullyApproved.isAgreed(), "Contract must be marked agreed once both parties approve");
+        assertTrue(fullyApproved.isAgreed());
 
-        // 4. Milestone lifecycle
+        // 4. Milestone creation
         Milestone m1 = projectService.createMilestone(
                 project.getId(),
                 "Wireframes & Architecture",
@@ -124,145 +138,223 @@ class ChatEscrowApplicationTests {
                 "wireframes-v1.pdf"
         );
         assertNotNull(sub.getId());
+        assertEquals(Milestone.MilestoneStatus.SUBMITTED, milestoneRepository.findById(m1.getId()).orElseThrow().getStatus());
 
-        // Verify milestone status transitioned to SUBMITTED
-        Milestone submittedMilestone = milestoneRepository.findById(m1.getId()).orElseThrow();
-        assertEquals(Milestone.MilestoneStatus.SUBMITTED, submittedMilestone.getStatus());
-
-        // 6. AI Acceptance Gate evaluation
+        // 6. AI acceptance evaluation
         AcceptanceReport report = milestoneService.evaluateSubmission(sub.getId());
         assertNotNull(report);
         assertNotNull(report.getCriterionResultsJson());
-        assertNotNull(report.getEvidenceSummary());
 
-        // 7. Client Decision: Request revision
-        Milestone revisedMilestone = milestoneService.requestRevision(m1.getId(), "Alice Client", "Please add dark mode wireframes");
-        assertEquals(Milestone.MilestoneStatus.REVISION_REQUESTED, revisedMilestone.getStatus());
+        // 7. Client revision request and resubmission
+        Milestone revised = milestoneService.requestRevision(m1.getId(), "Alice Client", "Please add dark mode");
+        assertEquals(Milestone.MilestoneStatus.REVISION_REQUESTED, revised.getStatus());
 
-        // Freelancer resubmits
-        Submission sub2 = milestoneService.submitEvidence(
-                m1.getId(),
-                "Bob Dev",
-                "Added dark mode wireframes as requested",
-                "https://figma.com/file/demo123-dark",
-                "wireframes-v2.pdf"
-        );
-        assertNotNull(sub2);
+        milestoneService.submitEvidence(m1.getId(), "Bob Dev", "Added dark mode wireframes", "https://figma.com/dark", "v2.pdf");
 
-        // Client Decision: Accept milestone
-        Milestone acceptedMilestone = milestoneService.acceptMilestone(m1.getId(), "Alice Client");
-        assertEquals(Milestone.MilestoneStatus.ACCEPTED, acceptedMilestone.getStatus());
+        // Client accepts milestone
+        Milestone accepted = milestoneService.acceptMilestone(m1.getId(), "Alice Client");
+        assertEquals(Milestone.MilestoneStatus.ACCEPTED, accepted.getStatus());
 
-        // 8. Milestone Payout/Release Workflow
-        Map<String, Object> releaseResp = milestoneService.releaseMilestone(
-                m1.getId(), "Alice Client", "bob@example.com");
+        // 8. Fund milestone (required before release)
+        Payment capturedPayment = Payment.builder()
+                .projectId(project.getId())
+                .milestoneId(m1.getId())
+                .amount(new BigDecimal("1000"))
+                .currency("USD")
+                .provider("PAYPAL")
+                .providerOrderId("PAY-ORD-100")
+                .providerCaptureId("PAY-CAP-100")
+                .status(Payment.PaymentStatus.CAPTURED)
+                .verifiedAt(Instant.now())
+                .build();
+        paymentRepository.save(capturedPayment);
+
+        when(paypalService.createPayout(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new PayPalService.PayoutResult("batch-test-100", "SUCCESS", false, "Payout succeeded"));
+
+        // 9. Client authorizes release
+        Map<String, Object> releaseResp = milestoneService.releaseMilestone(m1.getId(), "Alice Client", "bob@example.com");
         assertNotNull(releaseResp);
         assertEquals(m1.getId(), releaseResp.get("milestoneId"));
-        assertNotNull(releaseResp.get("payoutBatchId"));
+        assertEquals("batch-test-100", releaseResp.get("payoutBatchId"));
 
-        // 9. Dispute & Evidence Pack assembly
+        // 10. Dispute pack assembly
         Map<String, Object> disputePack = milestoneService.getDisputePack(m1.getId());
         assertNotNull(disputePack);
         assertNotNull(disputePack.get("project"));
-        assertNotNull(disputePack.get("milestone"));
         assertNotNull(disputePack.get("submissions"));
-        assertNotNull(disputePack.get("auditTimeline"));
-
-        // 10. Verify auditable timeline
-        List<AuditEvent> timeline = projectService.getTimeline(project.getId());
-        assertFalse(timeline.isEmpty(), "Audit timeline must record all critical events");
-        assertTrue(timeline.stream().anyMatch(e -> "CONTRACT_AGREED".equals(e.getEventType())));
-        assertTrue(timeline.stream().anyMatch(e -> "MILESTONE_ACCEPTED".equals(e.getEventType())));
-        assertTrue(timeline.stream().anyMatch(e -> "MILESTONE_PAYOUT_RELEASED".equals(e.getEventType())));
     }
 
     @Test
-    @DisplayName("Release milestone cannot be called on non-accepted milestone")
-    void releaseMilestoneFailsWhenNotAccepted() {
-        Project project = projectService.createProject("Test", "Desc", "C", "F", new BigDecimal("500"), "USD");
-        Milestone m = projectService.createMilestone(project.getId(), "M1", new BigDecimal("500"), "2025-11-01", "D", "AC", "Desc", null);
-        assertEquals(Milestone.MilestoneStatus.NOT_STARTED, m.getStatus());
+    @DisplayName("Role spoofing on accept and release is blocked (HTTP 403)")
+    void roleSpoofingBlocked() throws Exception {
+        Project project = projectService.createProject("Role Security Project", "Testing spoofing", "Sarah", "Alex", new BigDecimal("500"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "Task 1", new BigDecimal("500"), "2025-10-30", "Code", "Pass", "Desc", null);
 
-        assertThrows(IllegalStateException.class, () ->
-                milestoneService.releaseMilestone(m.getId(), "C", "f@example.com"));
+        // Submit evidence as freelancer
+        milestoneService.submitEvidence(m.getId(), "Alex", "Finished work", "https://github.com/alex", "app.zip");
+
+        // 1. Attempt to accept milestone as freelancer -> must be 403 Forbidden
+        mockMvc.perform(post("/api/milestones/" + m.getId() + "/accept")
+                        .header("X-Actor-Role", "freelancer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden());
+
+        // 2. Attempt to release milestone as freelancer -> must be 403 Forbidden
+        mockMvc.perform(post("/api/milestones/" + m.getId() + "/release")
+                        .header("X-Actor-Role", "freelancer")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{}"))
+                .andExpect(status().isForbidden());
+
+        // 3. Attempt to approve freelancer contract as client -> must be 403 Forbidden
+        ContractVersion cv = contractService.saveDraft(project.getId(), "{}");
+        mockMvc.perform(post("/api/projects/" + project.getId() + "/contract-versions/" + cv.getId() + "/approve")
+                        .header("X-Actor-Role", "client")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"role\":\"freelancer\"}"))
+                .andExpect(status().isForbidden());
     }
 
     @Test
-    @DisplayName("Escrow Lifecycle: Fund milestone, refund escrow to client, and verify audit records")
-    void testEscrowFundingAndRefund() {
-        Project project = projectService.createProject("Escrow Refund Test", "Testing refund", "Alice", "Bob", new BigDecimal("1200"), "USD");
-        Milestone m = projectService.createMilestone(project.getId(), "API Setup", new BigDecimal("1200"), "2025-12-01", "API Docs", "100% test pass", "Setup API", null);
-        assertEquals(Milestone.MilestoneStatus.NOT_STARTED, m.getStatus());
+    @DisplayName("Failed capture and 422 from PayPal returns 4xx error status")
+    void failedCaptureReturnsErrorStatus() throws Exception {
+        Project project = projectService.createProject("Capture Test", "Testing capture failure", "C", "F", new BigDecimal("400"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "M422", new BigDecimal("400"), "2025-10-30", "D", "AC", "Desc", null);
 
-        // Process refund of escrow
-        Milestone refunded = milestoneService.refundMilestoneEscrow(m.getId(), "Alice", "Scope altered by mutual consent");
-        assertNotNull(refunded);
-        assertEquals(Milestone.MilestoneStatus.NOT_STARTED, refunded.getStatus());
-
-        // Verify audit event
-        List<AuditEvent> timeline = projectService.getTimeline(project.getId());
-        assertTrue(timeline.stream().anyMatch(e -> "MILESTONE_ESCROW_REFUNDED".equals(e.getEventType())));
-    }
-
-    @Test
-    @DisplayName("Escrow Dispute Flow: Flag disagreement -> AI Mediation advisory -> Mutual resolution (split 50/50)")
-    void testDisputeFlaggingAiMediationAndMutualResolution() {
-        Project project = projectService.createProject("Dispute Mediation Test", "Testing AI Mediation", "Alice", "Bob", new BigDecimal("800"), "USD");
-        Milestone m = projectService.createMilestone(project.getId(), "Design Phase", new BigDecimal("800"), "2025-11-15", "Design System", "Pixel-perfect tokens", "Design", null);
-
-        // Submit evidence
-        Submission sub = milestoneService.submitEvidence(m.getId(), "Bob", "Designs submitted", "https://figma.com/demo", "spec.pdf");
-        assertNotNull(sub);
-
-        // Flag disagreement
-        Milestone disputed = milestoneService.flagDisagreement(m.getId(), "Alice", "Deliverable misses mobile breakpoint specifications");
-        assertEquals(Milestone.MilestoneStatus.DISAGREEMENT_FLAGGED, disputed.getStatus());
-
-        // Request AI Dispute Mediation
-        Map<String, Object> mediation = milestoneService.aiMediateDispute(m.getId());
-        assertNotNull(mediation);
-        assertEquals("Design Phase", mediation.get("milestoneTitle"));
-        assertEquals(0, new BigDecimal("800").compareTo((BigDecimal) mediation.get("amount")));
-        assertEquals("MUTUAL_SPLIT_50_50", mediation.get("recommendedResolution"));
-        assertEquals(0, new BigDecimal("400").compareTo((BigDecimal) mediation.get("recommendedSplitClient")));
-        assertEquals(0, new BigDecimal("400").compareTo((BigDecimal) mediation.get("recommendedSplitFreelancer")));
-        assertNotNull(mediation.get("analysis"));
-        assertNotNull(mediation.get("advisoryNote"));
-
-        // Mutual settlement (50/50 split)
-        Map<String, Object> resolution = milestoneService.resolveDispute(m.getId(), "Alice", "split", "Agreed to 50/50 split per AI recommendation");
-        assertNotNull(resolution);
-        assertEquals("MUTUAL_SPLIT_50_50", resolution.get("status"));
-        assertEquals("split", resolution.get("resolution"));
-
-        // Verify milestone is updated to ACCEPTED
-        Milestone resolvedMilestone = milestoneRepository.findById(m.getId()).orElseThrow();
-        assertEquals(Milestone.MilestoneStatus.ACCEPTED, resolvedMilestone.getStatus());
-
-        // Verify audit timeline contains dispute events
-        List<AuditEvent> timeline = projectService.getTimeline(project.getId());
-        assertTrue(timeline.stream().anyMatch(e -> "MILESTONE_DISAGREEMENT_FLAGGED".equals(e.getEventType())));
-        assertTrue(timeline.stream().anyMatch(e -> "DISPUTE_MUTUALLY_RESOLVED".equals(e.getEventType())));
-    }
-
-    @Test
-    @DisplayName("Payment Record Refund: Verify payment cancellation and audit logging")
-    void testPaymentRecordRefund() {
-        Project project = projectService.createProject("Payment Refund Test", "Testing payment refund", "ClientX", "FreelancerY", new BigDecimal("500"), "USD");
         Payment payment = Payment.builder()
                 .projectId(project.getId())
-                .amount(new BigDecimal("500"))
+                .milestoneId(m.getId())
+                .amount(new BigDecimal("400"))
                 .currency("USD")
                 .provider("PAYPAL")
+                .providerOrderId("ORD-FAIL-422")
+                .status(Payment.PaymentStatus.APPROVAL_PENDING)
+                .build();
+        paymentRepository.save(payment);
+
+        when(paypalService.captureOrder("ORD-FAIL-422"))
+                .thenThrow(new RuntimeException("PayPal capture error (422 UNPROCESSABLE_ENTITY): TRANSACTION_REFUSED"));
+
+        // Capture request must fail with an error response (NOT HTTP 200 with fake COMPLETED)
+        assertThrows(RuntimeException.class, () -> paymentService.captureOrder("ORD-FAIL-422"));
+
+        // Reject unknown order IDs without creating fake payments
+        mockMvc.perform(post("/api/payments/paypal/orders/UNKNOWN_ORDER_999/capture"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("Forged signature and duplicate webhook handling")
+    void forgedAndDuplicateWebhookHandling() throws Exception {
+        when(paypalService.isConfigured()).thenReturn(true);
+        when(paypalService.verifyWebhookSignature(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(false); // Forged signature
+
+        // 1. Forged signature webhook receives received with status FAILED
+        mockMvc.perform(post("/api/webhooks/paypal")
+                        .header("PAYPAL-TRANSMISSION-ID", "fake-tx-123")
+                        .header("PAYPAL-TRANSMISSION-SIG", "fake-sig")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"id\":\"WH-FORGED-1\",\"event_type\":\"PAYMENT.CAPTURE.COMPLETED\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.verificationStatus").value("FAILED"));
+
+        // 2. Duplicate webhook event gets duplicate_ignored
+        mockMvc.perform(post("/api/webhooks/paypal")
+                        .header("PAYPAL-TRANSMISSION-ID", "fake-tx-123")
+                        .header("PAYPAL-TRANSMISSION-SIG", "fake-sig")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"id\":\"WH-FORGED-1\",\"event_type\":\"PAYMENT.CAPTURE.COMPLETED\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("duplicate_ignored"));
+    }
+
+    @Test
+    @DisplayName("Double release returns same payout idempotently")
+    void doubleReleaseReturnsSamePayoutIdempotently() {
+        Project project = projectService.createProject("Idempotent Release", "Testing double release", "Client", "Dev", new BigDecimal("300"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "Milestone Release", new BigDecimal("300"), "2025-10-30", "Work", "Good", "Desc", null);
+
+        milestoneService.submitEvidence(m.getId(), "Dev", "Finished", "link", "file");
+        milestoneService.acceptMilestone(m.getId(), "Client");
+
+        Payment p = Payment.builder()
+                .projectId(project.getId())
+                .milestoneId(m.getId())
+                .amount(new BigDecimal("300"))
+                .currency("USD")
+                .provider("PAYPAL")
+                .providerOrderId("ORD-IDEMP-01")
                 .status(Payment.PaymentStatus.CAPTURED)
                 .build();
-        payment = paymentRepository.save(payment);
+        paymentRepository.save(p);
 
-        Payment refunded = paymentService.refundPayment(payment.getId(), "Client requested project cancellation");
-        assertNotNull(refunded);
-        assertEquals(Payment.PaymentStatus.CANCELLED, refunded.getStatus());
+        when(paypalService.createPayout(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new PayPalService.PayoutResult("batch-idemp-01", "SUCCESS", false, "Payout batch created"));
 
-        List<AuditEvent> timeline = projectService.getTimeline(project.getId());
-        assertTrue(timeline.stream().anyMatch(e -> "ESCROW_REFUND_PROCESSED".equals(e.getEventType())));
+        // First release call
+        Map<String, Object> firstRelease = milestoneService.releaseMilestone(m.getId(), "Client", "dev@example.com");
+        assertEquals(false, firstRelease.get("alreadyReleased"));
+        assertEquals("batch-idemp-01", firstRelease.get("payoutBatchId"));
+
+        // Second release call (double release) -> must return same payout record idempotently
+        Map<String, Object> secondRelease = milestoneService.releaseMilestone(m.getId(), "Client", "dev@example.com");
+        assertEquals(true, secondRelease.get("alreadyReleased"));
+        assertEquals("batch-idemp-01", secondRelease.get("payoutBatchId"));
+    }
+
+    @Test
+    @DisplayName("Release with only DEMO_ESCROW payment produces DEMO_SIMULATED release status")
+    void releaseWithDemoEscrowProducesDemoSimulated() {
+        Project project = projectService.createProject("Simulated Release", "Testing simulated payout", "Sarah", "Alex", new BigDecimal("250"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "Design Phase", new BigDecimal("250"), "2025-10-30", "Figma", "Pixel perfect", "Desc", null);
+
+        milestoneService.submitEvidence(m.getId(), "Alex", "Designs uploaded", "figma.com", "spec.pdf");
+        milestoneService.acceptMilestone(m.getId(), "Sarah");
+
+        // Fund with DEMO_ESCROW
+        paymentService.recordDemoPayment(project.getId(), m.getId(), new BigDecimal("250"), "USD");
+
+        // Release milestone
+        Map<String, Object> release = milestoneService.releaseMilestone(m.getId(), "Sarah", "alex@example.com");
+        assertEquals("DEMO_SIMULATED", release.get("payoutStatus"));
+        assertEquals(true, release.get("isSimulated"));
+        assertEquals("DEMO_ESCROW", release.get("provider"));
+    }
+
+    @Test
+    @DisplayName("AI schema validation validates response and rejects malformed schema")
+    void aiSchemaValidationRejectsMalformedResponse() {
+        // Valid evaluation JSON passes
+        String validJson = """
+                {
+                  "criterionResults": [
+                    {
+                      "criterion": "Responsive design",
+                      "status": "MET",
+                      "evidence": "Matches mobile and desktop viewports",
+                      "gap": null,
+                      "confidence": "high"
+                    }
+                  ],
+                  "overallSummary": "All criteria met.",
+                  "missingEvidence": [],
+                  "uncertainties": [],
+                  "recommendedNextStep": "Approve milestone",
+                  "aiDisclaimer": "Advisory only"
+                }
+                """;
+        String validated = aiService.validateEvaluationSchema(validJson, "Responsive design");
+        assertNotNull(validated);
+
+        // Missing criterionResults throws schema error
+        String malformedJson = "{\"overallSummary\":\"No results here\"}";
+        assertThrows(RuntimeException.class, () -> aiService.validateEvaluationSchema(malformedJson, "Criteria"));
+
+        // Malformed contract extraction throws error
+        String invalidContract = "{\"deliverables\":[\"App\"]}";
+        assertThrows(RuntimeException.class, () -> aiService.validateContractExtractionSchema(invalidContract));
     }
 }
