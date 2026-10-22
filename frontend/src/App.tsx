@@ -2,7 +2,6 @@ import { useState, useEffect, type ReactNode } from "react"
 import {
   activities,
   formatMoney,
-  reviewFindings,
   statusLabel,
   paymentStatusLabel,
   setActorRole,
@@ -24,6 +23,7 @@ import {
   getDisputePack,
   createPaypalOrder,
   capturePaypalOrder,
+  recheckPaypalOrder,
   depositDemoEscrow,
   getProjectPayments,
   refundPayment,
@@ -350,7 +350,7 @@ function TrustOrbit() {
       </div>
       <div className="absolute right-0 top-[18%] rounded-2xl border border-white/10 bg-white/8 px-3 py-2 backdrop-blur-xl">
         <p className="text-[0.6rem] font-bold uppercase tracking-widest text-white/40">Review state</p>
-        <p className="mt-0.5 text-xs font-bold text-accent">94% match</p>
+        <p className="mt-0.5 text-xs font-bold text-accent">AI Gate Ready</p>
       </div>
     </div>
   )
@@ -393,7 +393,8 @@ function Dashboard({ navigate, projectId }: { navigate: (s: Screen) => void; pro
 
   const totalBudget = project?.totalBudget ?? 1200
   const acceptedCount = milestones.filter((m) => m.status === "ACCEPTED").length
-  const progressPct = milestones.length > 0 ? Math.round((acceptedCount / milestones.length) * 100) : 42
+  const pendingReviewMilestone = milestones.find((m) => m.status === "SUBMITTED")
+  const progressPct = milestones.length > 0 ? Math.round((acceptedCount / milestones.length) * 100) : 0
 
   return (
     <div className="space-y-6">
@@ -414,12 +415,12 @@ function Dashboard({ navigate, projectId }: { navigate: (s: Screen) => void; pro
               Work moves faster when <span className="text-accent">trust is visible.</span>
             </p>
             <p className="mt-5 max-w-lg text-sm leading-7 text-white/55 md:text-base">
-              AI contract extraction · Mutual approval · Fake Money & Sandbox escrow · Evidence-based acceptance gate
+              AI contract extraction · Mutual approval · Milestone protection & Sandbox checkout · Evidence-based acceptance gate
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Button icon="plus" onClick={() => navigate("builder")}>Build agreement</Button>
               <button onClick={() => navigate("payment")} className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/8 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-white/14">
-                Fund Escrow (Fake Money) <Icon name="wallet" size="sm" />
+                Fund Milestone (Demo Mode) <Icon name="wallet" size="sm" />
               </button>
               <button onClick={() => navigate("review")} className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/8 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-white/14">
                 Review work <Icon name="arrow" size="sm" />
@@ -436,9 +437,27 @@ function Dashboard({ navigate, projectId }: { navigate: (s: Screen) => void; pro
       </section>
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <StatCard label="Awaiting your review" value="Frontend Milestone" detail="Alex submitted work with evidence links" icon="clock" tone="amber" />
-        <StatCard label="Escrow status" value="Simulated / Sandbox" detail="100% fake money protection mode" icon="wallet" tone="green" />
-        <StatCard label="Protection guarantee" value="Mutual consent" detail="Funds only release on client acceptance" icon="shield" tone="blue" />
+        <StatCard
+          label="Awaiting your review"
+          value={pendingReviewMilestone ? pendingReviewMilestone.title : "All up to date"}
+          detail={pendingReviewMilestone ? "Deliverable submitted for review" : "No pending submissions"}
+          icon="clock"
+          tone={pendingReviewMilestone ? "amber" : "blue"}
+        />
+        <StatCard
+          label="Payment protection mode"
+          value="Simulated / Sandbox"
+          detail="PayPal Sandbox & demo ledger protection"
+          icon="wallet"
+          tone="green"
+        />
+        <StatCard
+          label="Protection guarantee"
+          value="Mutual consent"
+          detail="Funds release only upon client approval"
+          icon="shield"
+          tone="navy"
+        />
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.5fr)_minmax(20rem,0.8fr)]">
@@ -644,10 +663,16 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
         acceptanceCriteria: ["Meets acceptance criteria"],
       },
     ])
+    setClientApproved(false)
+    setFreelancerApproved(false)
+    setAgreementSuccess(false)
   }
 
   const handleRemoveMilestone = (index: number) => {
     setMilestonesList((prev) => prev.filter((_, i) => i !== index))
+    setClientApproved(false)
+    setFreelancerApproved(false)
+    setAgreementSuccess(false)
   }
 
   const handleUpdateMilestone = (index: number, field: keyof EditableMilestone, value: unknown) => {
@@ -656,13 +681,50 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
       copy[index] = { ...copy[index], [field]: value }
       return copy
     })
+    setClientApproved(false)
+    setFreelancerApproved(false)
+    setAgreementSuccess(false)
   }
 
+  const [savingDraft, setSavingDraft] = useState(false)
+  const handleSaveDraft = async () => {
+    if (!draft?.id) return
+    setSavingDraft(true); setError(null)
+    try {
+      const termsObj = {
+        projectSummary,
+        milestones: milestonesList,
+      }
+      const updated = await saveDraft(projectId, draft.id, JSON.stringify(termsObj))
+      setDraft(updated)
+      setClientApproved(false)
+      setFreelancerApproved(false)
+      setAgreementSuccess(false)
+    } catch (e) {
+      setError("Failed to save draft version: " + (e instanceof Error ? e.message : String(e)))
+    } finally {
+      setSavingDraft(false)
+    }
+  }
+
+  const hasMissingTerms = milestonesList.some(
+    (m) =>
+      !m.title.trim() ||
+      Number(m.amount) <= 0 ||
+      m.title.includes("Needs confirmation") ||
+      m.dueDate === "Needs confirmation" ||
+      !m.dueDate
+  )
+
   const handleApprove = async (role: "client" | "freelancer") => {
+    if (hasMissingTerms) {
+      setError("Cannot sign agreement with unconfirmed terms or $0 amounts. Please complete all fields before signing.")
+      return
+    }
     setApproving(role); setError(null)
     try {
       if (draft && draft.id && !draft.id.startsWith("draft-")) {
-        await approveContract(projectId, draft.id, role).catch(() => {})
+        await approveContract(projectId, draft.id, role)
       }
       if (role === "client") setClientApproved(true)
       else setFreelancerApproved(true)
@@ -670,27 +732,32 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
       const isBothApproved = (role === "client" ? true : clientApproved) && (role === "freelancer" ? true : freelancerApproved)
       if (isBothApproved) {
         setAgreementSuccess(true)
-        // Sync milestones to backend project
+        // Sync milestones to backend project only if none exist yet
         setSavingMilestones(true)
         try {
-          for (const m of milestonesList) {
-            await createMilestone(projectId, {
-              title: m.title,
-              amount: Number(m.amount),
-              dueDate: m.dueDate,
-              deliverables: Array.isArray(m.deliverables) ? m.deliverables.join("|") : m.deliverables,
-              acceptanceCriteria: Array.isArray(m.acceptanceCriteria) ? m.acceptanceCriteria.join("|") : m.acceptanceCriteria,
-              description: `Agreed milestone: ${m.title}`,
-              contractVersionId: draft?.id,
-            }).catch(() => {})
+          const existing = await getMilestones(projectId).catch(() => [])
+          if (existing.length === 0) {
+            for (const m of milestonesList) {
+              await createMilestone(projectId, {
+                title: m.title,
+                amount: Number(m.amount),
+                dueDate: m.dueDate,
+                deliverables: Array.isArray(m.deliverables) ? m.deliverables.join("|") : m.deliverables,
+                acceptanceCriteria: Array.isArray(m.acceptanceCriteria) ? m.acceptanceCriteria.join("|") : m.acceptanceCriteria,
+                description: `Agreed milestone: ${m.title}`,
+                contractVersionId: draft?.id,
+              })
+            }
           }
           onRefresh()
+        } catch (syncErr) {
+          setError("Approved, but failed to sync milestones: " + (syncErr instanceof Error ? syncErr.message : String(syncErr)))
         } finally {
           setSavingMilestones(false)
         }
       }
     } catch (e) {
-      setError(String(e))
+      setError("Approval failed: " + (e instanceof Error ? e.message : String(e)))
     } finally {
       setApproving(null)
     }
@@ -781,6 +848,11 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
                 <p className="mt-1 text-xs text-muted">Customizable before signing. Edits require mutual re-approval.</p>
               </div>
               <div className="flex items-center gap-2">
+                {draft?.id && !draft.id.startsWith("draft-") && (
+                  <Button variant="ghost" loading={savingDraft} className="text-xs py-1.5" onClick={handleSaveDraft}>
+                    Save Draft (v{draft.versionNumber ? draft.versionNumber + 1 : 2})
+                  </Button>
+                )}
                 <Button variant="secondary" icon="plus" className="text-xs py-1.5" onClick={handleAddMilestone}>
                   Add Milestone
                 </Button>
@@ -879,23 +951,25 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
                         />
                       </div>
                       <div>
-                        <span className="text-subtle font-semibold block mb-1">Deliverables:</span>
-                        <input
-                          type="text"
-                          value={Array.isArray(m.deliverables) ? m.deliverables.join(", ") : m.deliverables}
-                          onChange={(e) => handleUpdateMilestone(idx, "deliverables", e.target.value.split(", "))}
-                          className="field text-xs py-1"
+                        <span className="text-subtle font-semibold block mb-1">Deliverables (one per line):</span>
+                        <textarea
+                          rows={2}
+                          value={Array.isArray(m.deliverables) ? m.deliverables.join("\n") : m.deliverables}
+                          onChange={(e) => handleUpdateMilestone(idx, "deliverables", e.target.value.split("\n"))}
+                          className="field text-xs py-1 resize-none font-sans"
+                          placeholder="Deliverables..."
                         />
                       </div>
                     </div>
 
                     <div>
-                      <span className="text-subtle font-semibold block mb-1 text-xs">Acceptance Criteria (for AI Gate & Client Acceptance):</span>
-                      <input
-                        type="text"
-                        value={Array.isArray(m.acceptanceCriteria) ? m.acceptanceCriteria.join(" | ") : m.acceptanceCriteria}
-                        onChange={(e) => handleUpdateMilestone(idx, "acceptanceCriteria", e.target.value.split(" | "))}
-                        className="field text-xs py-1"
+                      <span className="text-subtle font-semibold block mb-1 text-xs">Acceptance Criteria (one per line):</span>
+                      <textarea
+                        rows={2}
+                        value={Array.isArray(m.acceptanceCriteria) ? m.acceptanceCriteria.join("\n") : m.acceptanceCriteria}
+                        onChange={(e) => handleUpdateMilestone(idx, "acceptanceCriteria", e.target.value.split("\n"))}
+                        className="field text-xs py-1 resize-none font-sans"
+                        placeholder="Acceptance criteria..."
                       />
                     </div>
                   </div>
@@ -912,10 +986,17 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
                 <Heading level={2}>Mutual Approval (Milestone Payment Protocol)</Heading>
                 <p className="mt-1 text-xs text-muted">Both parties must explicitly approve before milestone funding is activated.</p>
               </div>
-              <Badge tone={clientApproved && freelancerApproved ? "green" : "amber"}>
-                {clientApproved && freelancerApproved ? "Fully Agreed" : "Pending Signature"}
+              <Badge tone={clientApproved && freelancerApproved ? "green" : hasMissingTerms ? "red" : "amber"}>
+                {clientApproved && freelancerApproved ? "Fully Agreed" : hasMissingTerms ? "Incomplete Terms" : "Pending Signature"}
               </Badge>
             </div>
+
+            {hasMissingTerms && (
+              <div className="mt-4 rounded-xl border border-warning-border bg-warning-soft p-3 text-xs text-warning flex items-center gap-2">
+                <Icon name="warning" size="sm" />
+                <span>All milestone amounts, dates, and terms must be confirmed before parties can sign.</span>
+              </div>
+            )}
 
             <div className="mt-5 space-y-3">
               {/* Client Approval */}
@@ -930,7 +1011,7 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
                 {clientApproved ? (
                   <Badge tone="green"><Icon name="check" size="sm" /> Approved</Badge>
                 ) : (
-                  <Button variant="soft" loading={approving === "client"} onClick={() => handleApprove("client")}>
+                  <Button variant="soft" loading={approving === "client"} disabled={hasMissingTerms} onClick={() => handleApprove("client")}>
                     Sign as Client
                   </Button>
                 )}
@@ -948,7 +1029,7 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
                 {freelancerApproved ? (
                   <Badge tone="green"><Icon name="check" size="sm" /> Approved</Badge>
                 ) : (
-                  <Button variant="soft" loading={approving === "freelancer"} onClick={() => handleApprove("freelancer")}>
+                  <Button variant="soft" loading={approving === "freelancer"} disabled={hasMissingTerms} onClick={() => handleApprove("freelancer")}>
                     Sign as Freelancer
                   </Button>
                 )}
@@ -962,7 +1043,7 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
             {clientApproved && freelancerApproved && (
               <div className="mt-5 flex justify-end gap-3 pt-2">
                 <Button variant="secondary" onClick={() => navigate("agreement")}>View Active Agreement</Button>
-                <Button icon="wallet" onClick={() => navigate("payment")}>Proceed to Escrow Checkout →</Button>
+                <Button icon="wallet" onClick={() => navigate("payment")}>Proceed to Milestone Funding →</Button>
               </div>
             )}
           </Card>
@@ -1299,15 +1380,31 @@ function EscrowCertificateModal({
   onClose: () => void
 }) {
   const [downloaded, setDownloaded] = useState(false)
+  const [digest, setDigest] = useState<string>("Computing SHA-256 digest...")
   const certId = `CERT-${payment.id.replace(/[^a-zA-Z0-9]/g, "").slice(0, 10).toUpperCase()}`
-  const mockSha = `sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+
+  useEffect(() => {
+    const computeHash = async () => {
+      const canonicalPayload = `CHATESCROW-AUDIT-RECORD|${certId}|${payment.id}|${payment.amount}|${payment.currency}|${payment.provider}|${payment.providerOrderId ?? "N/A"}|${payment.providerCaptureId ?? "N/A"}|${payment.verifiedAt || payment.createdAt}`
+      try {
+        const msgUint8 = new TextEncoder().encode(canonicalPayload)
+        const hashBuffer = await crypto.subtle.digest("SHA-256", msgUint8)
+        const hashArray = Array.from(new Uint8Array(hashBuffer))
+        const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("")
+        setDigest(`sha256:${hashHex}`)
+      } catch {
+        setDigest(`sha256:${payment.id.replace(/-/g, "").padEnd(64, "0").slice(0, 64)}`)
+      }
+    }
+    computeHash()
+  }, [certId, payment])
 
   const handleDownload = () => {
     const text = `========================================================================
-CHATESCROW VERIFIABLE ESCROW DEPOSIT CERTIFICATE
+CHATESCROW MILESTONE FUNDING AUDIT CERTIFICATE
 Certificate ID : ${certId}
 Timestamp      : ${payment.verifiedAt || payment.createdAt}
-Digital Digest : ${mockSha}
+Digital Digest : ${digest}
 ========================================================================
 
 PROJECT INFORMATION:
@@ -1315,20 +1412,20 @@ Project Title  : E-commerce Website Development
 Depositor      : Sarah Miller (Demo Client)
 Beneficiary    : Alex Carter (Demo Freelancer)
 
-ESCROW ALLOCATION:
+MILESTONE ALLOCATION:
 Milestone      : ${milestone?.title || "Project Milestone"}
-Locked Amount  : ${payment.amount} ${payment.currency}
-Vault Provider : ${payment.provider === "DEMO_ESCROW" ? "ChatEscrow Simulated Vault (100% Fake Money)" : "PayPal Developer Sandbox"}
+Funded Amount  : ${payment.amount} ${payment.currency}
+Vault Provider : ${payment.provider === "DEMO_ESCROW" ? "ChatEscrow Simulated Demo Ledger" : "PayPal Developer Sandbox"}
 Provider Order : ${payment.providerOrderId || "N/A"}
 Provider Capture: ${payment.providerCaptureId || "N/A"}
-Status         : ${payment.status} (Verified & Vault-Secured)
+Status         : ${payment.status} (Verified in Milestone Ledger)
 
-MUTUAL ESCROW PROTOCOL:
-- Funds are locked in the neutral milestone ledger.
+MUTUAL PROTECTION PROTOCOL:
+- Funds are recorded in the neutral milestone ledger.
 - Funds release ONLY upon verified AI Acceptance Gate evaluation AND explicit Client Authorization.
-- Neither party may unilaterally drain the escrow without agreed dispute mediation.
+- Neither party may unilaterally drain funds without agreed dispute resolution.
 
-Authority: ChatEscrow Protocol v1.0 (Hackathon Verification Gateway)
+Authority: ChatEscrow Protocol v1.0 (Audit Trail Record)
 ========================================================================`
     const blob = new Blob([text], { type: "text/plain" })
     const url = URL.createObjectURL(blob)
@@ -1350,8 +1447,8 @@ Authority: ChatEscrow Protocol v1.0 (Hackathon Verification Gateway)
               <Icon name="shield" size="sm" />
             </span>
             <div>
-              <Heading level={2}>Verifiable Escrow Certificate</Heading>
-              <p className="text-xs text-muted">Cryptographic Proof of Vaulted Funds</p>
+              <Heading level={2}>Milestone Funding Audit Certificate</Heading>
+              <p className="text-xs text-muted">Audit Record of Secured Milestone Funds</p>
             </div>
           </div>
           <button onClick={onClose} className="rounded-lg p-2 text-muted hover:bg-surface" aria-label="Close modal">
@@ -1363,7 +1460,7 @@ Authority: ChatEscrow Protocol v1.0 (Hackathon Verification Gateway)
           <div className="rounded-2xl border border-success-border bg-gradient-to-b from-success-soft/30 to-surface p-5 space-y-3">
             <div className="flex items-center justify-between">
               <span className="font-mono text-muted">{certId}</span>
-              <Badge tone="green"><Icon name="check" size="sm" /> SECURED IN ESCROW</Badge>
+              <Badge tone="green"><Icon name="check" size="sm" /> SECURED IN LEDGER</Badge>
             </div>
             <div>
               <p className="text-2xl font-extrabold text-ink">{formatMoney(payment.amount)} {payment.currency}</p>
@@ -1382,14 +1479,14 @@ Authority: ChatEscrow Protocol v1.0 (Hackathon Verification Gateway)
               <p>Order Reference: <span className="text-ink">{payment.providerOrderId || "DEMO-TX-001"}</span></p>
               {payment.providerCaptureId && <p>Capture Reference: <span className="text-ink">{payment.providerCaptureId}</span></p>}
               <p>Verified Timestamp: <span className="text-ink">{payment.verifiedAt ? new Date(payment.verifiedAt).toLocaleString() : new Date().toLocaleString()}</span></p>
-              <p className="truncate">Digital Digest: <span className="text-ink">{mockSha}</span></p>
+              <p className="truncate">Digital Digest: <span className="text-ink">{digest}</span></p>
             </div>
           </div>
 
           <div className="rounded-xl border border-line p-3 text-muted">
             <p className="font-bold text-ink mb-1 flex items-center gap-1.5"><Icon name="lock" size="sm" /> Release Condition</p>
             <p className="leading-relaxed">
-              Funds are immutable and held in escrow protection. Release occurs only upon satisfactory completion of acceptance criteria and client authorization.
+              Funds are recorded in milestone protection. Release occurs only upon satisfactory completion of acceptance criteria and client authorization.
             </p>
           </div>
         </div>
@@ -1424,15 +1521,8 @@ function RefundModal({
       const updated = await refundPayment(payment.id, reason)
       onSuccess(updated)
       onClose()
-    } catch {
-      // Local fallback
-      const updated: Payment = {
-        ...payment,
-        status: "CANCELLED",
-        updatedAt: new Date().toISOString(),
-      }
-      onSuccess(updated)
-      onClose()
+    } catch (err) {
+      setError("Refund request failed: " + (err instanceof Error ? err.message : String(err)))
     } finally {
       setRefunding(false)
     }
@@ -1641,7 +1731,7 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
         submissionId,
         criterionResultsJson: JSON.stringify(demoRes),
         modelName: "demo-mode (backend unavailable)",
-        aiGenerated: true,
+        aiGenerated: false,
         createdAt: new Date().toISOString(),
       })
     } finally {
@@ -1702,7 +1792,7 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
     }
   }
 
-  const criterionResults = parsedReport ? ((parsedReport.criterionResults as Record<string, unknown>[]) ?? []) : reviewFindings.map((f) => ({ criterion: f.criterion, status: f.status === "Passed" ? "MET" : "PARTIALLY_MET", evidence: f.evidence, gap: null, confidence: "high" }))
+  const criterionResults = parsedReport ? ((parsedReport.criterionResults as Record<string, unknown>[]) ?? []) : []
 
   return (
     <div className="mx-auto max-w-6xl space-y-6">
@@ -1824,15 +1914,26 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
 
           {/* AI Acceptance Gate Report */}
           {evaluating && <Card className="p-8"><Spinner /></Card>}
-          {(report || !evaluating) && (
+          {!evaluating && !report && (
+            <Card className="overflow-hidden border border-line bg-surface/30 p-8 text-center space-y-3">
+              <span className="grid size-12 mx-auto place-items-center rounded-2xl bg-primary-soft text-primary">
+                <Icon name="spark" size="md" />
+              </span>
+              <Heading level={2}>Awaiting AI Acceptance Gate Evaluation</Heading>
+              <p className="text-sm text-muted max-w-md mx-auto">
+                No AI evaluation has been run for this milestone yet. Click <strong>Run AI Review</strong> on a submission above to evaluate submitted work against agreed criteria.
+              </p>
+            </Card>
+          )}
+          {!evaluating && report && (
             <Card className="overflow-hidden">
               <div className="flex flex-col justify-between gap-4 border-b border-line p-5 sm:flex-row sm:items-center md:p-6">
                 <div>
                   <div className="flex items-center gap-2 mb-1">
                     <Heading level={2}>AI Acceptance Report</Heading>
                     {report?.modelName && (
-                      <Badge tone={report.modelName.includes("live") ? "green" : "blue"}>
-                        <Icon name="spark" size="sm" /> {report.modelName}
+                      <Badge tone={report.aiGenerated ? "green" : "amber"}>
+                        <Icon name="spark" size="sm" /> {report.aiGenerated ? report.modelName : "Demo Evaluation Mode"}
                       </Badge>
                     )}
                   </div>
@@ -2057,13 +2158,17 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
 
   useEffect(() => {
     reloadData()
-    // Auto-capture redirect token from PayPal Sandbox
+    // Auto-capture redirect token from PayPal Sandbox only if initiated by this session
     const params = new URLSearchParams(window.location.search)
     const token = params.get("token")
     if (token) {
-      handleCaptureOrder(token).then(() => {
-        window.history.replaceState({}, document.title, window.location.pathname)
-      })
+      const pendingOrder = sessionStorage.getItem("chatescrow_pending_order")
+      if (pendingOrder === token || payments.some((p) => p.providerOrderId === token)) {
+        handleCaptureOrder(token).then(() => {
+          sessionStorage.removeItem("chatescrow_pending_order")
+          window.history.replaceState({}, document.title, window.location.pathname)
+        })
+      }
     }
   }, [projectId])
 
@@ -2075,33 +2180,17 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
     }
   }
 
-  // 1-Click Fake Money / Demo Escrow Deposit
+  // 1-Click Demo Milestone Deposit
   const handleDemoDeposit = async () => {
     setLoadingDemoDeposit(true); setError(null); setDemoDepositSuccess(null)
     const parsedAmount = parseFloat(amount) || 400
     try {
       const p = await depositDemoEscrow(projectId, selectedMilestoneId, parsedAmount)
       setPayments((prev) => [p, ...prev])
-      setDemoDepositSuccess(`Successfully locked ${formatMoney(parsedAmount)} into escrow using Fake Money simulation!`)
+      setDemoDepositSuccess(`Successfully recorded ${formatMoney(parsedAmount)} for milestone funding via demo simulation.`)
       reloadData()
-    } catch {
-      // Local demo payment record
-      const localPayment: Payment = {
-        id: "demo-pay-" + Date.now(),
-        projectId,
-        milestoneId: selectedMilestoneId,
-        provider: "DEMO_ESCROW",
-        providerOrderId: "DEMO-ESCROW-" + Date.now(),
-        providerCaptureId: "DEMO-CAP-" + Date.now(),
-        amount: parsedAmount,
-        currency: "USD",
-        status: "CAPTURED",
-        verifiedAt: new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }
-      setPayments((prev) => [localPayment, ...prev])
-      setDemoDepositSuccess(`Successfully locked ${formatMoney(parsedAmount)} into escrow using Fake Money simulation!`)
+    } catch (e) {
+      setError("Milestone demo deposit failed: " + (e instanceof Error ? e.message : String(e)))
     } finally {
       setLoadingDemoDeposit(false)
     }
@@ -2112,6 +2201,9 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
     setLoadingPaypal(true); setError(null); setOrderResult(null); setCaptureResult(null)
     try {
       const result = await createPaypalOrder(projectId, selectedMilestoneId, parseFloat(amount))
+      if (result.orderId) {
+        sessionStorage.setItem("chatescrow_pending_order", String(result.orderId))
+      }
       setOrderResult(result)
       reloadData()
     } catch (e) {
@@ -2128,9 +2220,21 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
     try {
       const result = await capturePaypalOrder(orderIdToCapture)
       setCaptureResult(result)
+      // Backend returns 200 only for CAPTURED. Any other status on 2xx means an
+      // idempotent already-captured response; non-2xx throws and is caught below.
+      if (result.status !== "CAPTURED") {
+        const providerStatus = result.providerStatus ? ` (PayPal: ${String(result.providerStatus)})` : ""
+        setError(
+          `Capture did not complete. Status: ${String(result.status)}${providerStatus}. ` +
+          "The payment was NOT charged. Check PayPal Sandbox or try again after approval."
+        )
+      }
       reloadData()
     } catch (e) {
-      setError(String(e))
+      // api() throws on non-2xx — surface the real HTTP error body
+      setError(
+        "Capture failed: " + (e instanceof Error ? e.message : String(e))
+      )
     } finally {
       setCapturing(false)
       setCapturingId(null)
@@ -2154,30 +2258,30 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
       <div className="page-masthead flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
           <div className="flex items-center gap-2 mb-2">
-            <Badge tone="green"><Icon name="shield" size="sm" /> 100% Fake Money Protection</Badge>
+            <Badge tone="green"><Icon name="shield" size="sm" /> Demo Simulation Mode</Badge>
             <Badge tone="blue">PayPal Sandbox Mode</Badge>
           </div>
-          <Heading>Escrow Funding & Checkout</Heading>
+          <Heading>Milestone Funding & Checkout</Heading>
           <p className="mt-1 text-sm text-muted">
-            Lock funds safely in escrow. You can use <strong>1-Click Fake Money</strong> (no real money or login needed) or <strong>PayPal Sandbox</strong>.
+            Secure milestone funds safely in the payment ledger. You can use <strong>1-Click Demo Deposit</strong> (simulation mode) or <strong>PayPal Sandbox</strong>.
           </p>
         </div>
         <Button variant="secondary" icon="refresh" onClick={reloadData}>Refresh Ledger</Button>
       </div>
 
-      {/* Escrow Balance Overview Cards */}
+      {/* Balance Overview Cards */}
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard
-          label="Total Escrow Locked"
+          label="Total Milestone Funds Secured"
           value={formatMoney(totalCaptured)}
-          detail="Funds safely locked in escrow ledger"
+          detail="Funds recorded in neutral milestone ledger"
           icon="shield"
           tone="green"
         />
         <StatCard
           label="Project Target"
           value="$1,200"
-          detail="Agreed total across all 4 milestones"
+          detail="Agreed total across all milestones"
           icon="trend"
           tone="blue"
         />
@@ -2194,12 +2298,12 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
 
       {demoDepositSuccess && (
         <InfoBanner tone="green">
-          <strong>Escrow Deposit Successful!</strong> {demoDepositSuccess} The milestone is now funded and work can proceed safely.
+          <strong>Milestone Funded Successfully!</strong> {demoDepositSuccess} Work can proceed under agreed terms.
         </InfoBanner>
       )}
 
       <div className="grid gap-6 md:grid-cols-2">
-        {/* Card 1: 1-Click Fake Money Escrow Deposit */}
+        {/* Card 1: 1-Click Demo Milestone Deposit */}
         <Card className="p-5 md:p-6 border-success-border bg-gradient-to-b from-success-soft/20 to-transparent">
           <div className="flex items-center justify-between border-b border-line pb-3">
             <div>
@@ -2207,9 +2311,9 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
                 <span className="grid size-7 place-items-center rounded-lg bg-success text-white">
                   <Icon name="shield" size="sm" />
                 </span>
-                <Heading level={2}>1-Click Fake Money Deposit</Heading>
+                <Heading level={2}>1-Click Demo Milestone Deposit</Heading>
               </div>
-              <p className="mt-1 text-xs text-muted">Recommended for evaluation — zero real funds, no login needed.</p>
+              <p className="mt-1 text-xs text-muted">Simulate milestone deposit into the ledger without real money or login.</p>
             </div>
             <Badge tone="green">Instant</Badge>
           </div>
@@ -2231,7 +2335,7 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
               </select>
             </Field>
 
-            <Field label="Escrow Amount (USD)" hint="Locked in simulation escrow until work is approved.">
+            <Field label="Funding Amount (USD)" hint="Locked in simulation ledger until work is approved.">
               <input
                 type="number"
                 value={amount}
@@ -2248,10 +2352,10 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
               className="w-full py-3"
               onClick={handleDemoDeposit}
             >
-              Deposit {formatMoney(parseFloat(amount) || 0)} Fake Money into Escrow
+              Deposit {formatMoney(parseFloat(amount) || 0)} into Milestone Ledger
             </Button>
             <p className="text-xs text-center text-subtle leading-relaxed">
-              Funds are recorded directly into the verifiable escrow ledger as verified & captured.
+              Funds are recorded directly into the milestone payment ledger as verified & captured.
             </p>
           </div>
         </Card>
@@ -2310,10 +2414,26 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
               </div>
             )}
 
-            {captureResult && (
+            {captureResult && captureResult.status === "CAPTURED" && (
               <div className="rounded-xl border border-success-border bg-success-soft p-3 space-y-1">
-                <p className="text-xs font-bold text-success flex items-center gap-1.5"><Icon name="check" size="sm" /> Captured & Verified</p>
+                <p className="text-xs font-bold text-success flex items-center gap-1.5"><Icon name="check" size="sm" /> Captured &amp; Verified</p>
                 <p className="text-xs text-muted font-mono">Order: {String(captureResult.orderId)}</p>
+                {captureResult.captureId && String(captureResult.captureId) && (
+                  <p className="text-xs text-muted font-mono">Capture ID: {String(captureResult.captureId)}</p>
+                )}
+              </div>
+            )}
+            {captureResult && captureResult.status === "FAILED" && (
+              <div className="rounded-xl border border-red-300 bg-red-50 p-3 space-y-1">
+                <p className="text-xs font-bold text-red-700 flex items-center gap-1.5"><Icon name="warning" size="sm" /> Capture Failed</p>
+                <p className="text-xs text-muted font-mono">Status: {String(captureResult.providerStatus ?? captureResult.status)}</p>
+                <p className="text-xs text-muted">No funds were charged. Ensure the order was approved on PayPal Sandbox, then try again.</p>
+              </div>
+            )}
+            {captureResult && captureResult.status !== "CAPTURED" && captureResult.status !== "FAILED" && (
+              <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 space-y-1">
+                <p className="text-xs font-bold text-amber-700 flex items-center gap-1.5"><Icon name="warning" size="sm" /> Capture Status: {String(captureResult.status)}</p>
+                <p className="text-xs text-muted">The order is in an unexpected state. No funds have been verified. Check PayPal Sandbox dashboard.</p>
               </div>
             )}
 
@@ -2343,11 +2463,11 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
         </Card>
       </div>
 
-      {/* Escrow Ledger Table */}
+      {/* Milestone Payment Ledger Table */}
       <Card className="overflow-hidden">
         <div className="flex items-center justify-between border-b border-line p-5 md:p-6">
           <div>
-            <Heading level={2}>Verifiable Escrow Ledger</Heading>
+            <Heading level={2}>Milestone Payment Ledger</Heading>
             <p className="mt-1 text-xs text-muted">Server-verified transactions ensuring buyer and seller protection.</p>
           </div>
           <Badge tone="green">{payments.length} Records</Badge>
@@ -2357,7 +2477,7 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
           {payments.length === 0 ? (
             <div className="p-8 text-center text-muted">
               <p className="text-sm">No payment records yet in the ledger.</p>
-              <p className="text-xs text-subtle mt-1">Use 1-Click Fake Money or PayPal Sandbox above to record an escrow deposit.</p>
+              <p className="text-xs text-subtle mt-1">Use 1-Click Demo Deposit or PayPal Sandbox above to record milestone funding.</p>
             </div>
           ) : payments.map((p) => (
             <div key={p.id} className="p-4 md:p-5 flex flex-wrap items-center justify-between gap-3">
@@ -2365,7 +2485,7 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
                 <div className="flex items-center gap-2">
                   <span className="font-extrabold text-ink text-base">{formatMoney(p.amount)} {p.currency}</span>
                   <Badge tone={p.provider === "DEMO_ESCROW" ? "green" : "blue"}>
-                    {p.provider === "DEMO_ESCROW" ? "Simulated Escrow" : "PayPal Sandbox"}
+                    {p.provider === "DEMO_ESCROW" ? "Demo Ledger" : "PayPal Sandbox"}
                   </Badge>
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted font-mono">
@@ -2390,6 +2510,35 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
                     Capture
                   </Button>
                 )}
+                {p.status === "UNKNOWN" && p.providerOrderId && (
+                  <Button
+                    variant="secondary"
+                    icon="warning"
+                    loading={capturingId === p.providerOrderId}
+                    onClick={async () => {
+                      setCapturingId(p.providerOrderId!)
+                      setError(null)
+                      try {
+                        const result = await recheckPaypalOrder(p.providerOrderId!)
+                        if (result.status === "CAPTURED") {
+                          reloadData()
+                        } else {
+                          setError(
+                            `Re-check result: ${String(result.status)}.` +
+                            (result.mismatch ? " Amount/currency mismatch — check PayPal Sandbox dashboard to reconcile." : " Status still unresolved.")
+                          )
+                        }
+                      } catch (e) {
+                        setError("Re-check failed: " + (e instanceof Error ? e.message : String(e)))
+                      } finally {
+                        setCapturingId(null)
+                      }
+                    }}
+                    className="text-xs py-1 px-2.5 border-amber-400 text-amber-700 hover:bg-amber-50"
+                  >
+                    Re-check
+                  </Button>
+                )}
               </div>
             </div>
           ))}
@@ -2410,15 +2559,7 @@ function Timeline({ projectId }: { projectId: string }) {
     setLoading(true); setError(null)
     getTimeline(projectId)
       .then((evts) => {
-        if (evts.length > 0) {
-          setEvents(evts)
-        } else {
-          setEvents([
-            { id: "e1", projectId, eventType: "DEMO_ESCROW_DEPOSITED", actorName: "Sarah Miller (Client)", safeMetadata: "{\"amount\":400,\"currency\":\"USD\"}", createdAt: new Date().toISOString() },
-            { id: "e2", projectId, eventType: "MILESTONE_EVIDENCE_SUBMITTED", actorName: "Alex Carter (Freelancer)", safeMetadata: "{\"milestone\":\"Frontend\"}", createdAt: new Date(Date.now() - 3600000).toISOString() },
-            { id: "e3", projectId, eventType: "CONTRACT_AGREED", actorName: "System", safeMetadata: "{\"version\":1}", createdAt: new Date(Date.now() - 7200000).toISOString() },
-          ])
-        }
+        setEvents(evts ?? [])
       })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false))

@@ -153,6 +153,14 @@ export interface WebhookEvent {
 
 // ── API helpers ──────────────────────────────────────────────
 
+/** Typed API error that carries the HTTP status code for fine-grained UI handling. */
+export class ApiError extends Error {
+  constructor(public readonly httpStatus: number, message: string) {
+    super(message)
+    this.name = "ApiError"
+  }
+}
+
 async function api<T>(path: string, opts?: RequestInit): Promise<T> {
   const actorId = currentActorRole === "client" ? "Sarah Miller" : "Alex Carter"
   const res = await fetch(`${API_BASE}${path}`, {
@@ -167,7 +175,7 @@ async function api<T>(path: string, opts?: RequestInit): Promise<T> {
   })
   if (!res.ok) {
     const text = await res.text().catch(() => "")
-    throw new Error(`API ${opts?.method ?? "GET"} ${path} → ${res.status}: ${text}`)
+    throw new ApiError(res.status, `API ${opts?.method ?? "GET"} ${path} → ${res.status}: ${text}`)
   }
   return res.json() as Promise<T>
 }
@@ -237,6 +245,8 @@ export const createPaypalOrder = (projectId: string, milestoneId: string, curren
   })
 export const capturePaypalOrder = (orderId: string) =>
   api<Record<string, unknown>>(`/api/payments/paypal/orders/${orderId}/capture`, { method: "POST", body: "{}" })
+export const recheckPaypalOrder = (orderId: string) =>
+  api<Record<string, unknown>>(`/api/payments/paypal/orders/${orderId}/recheck`, { method: "POST", body: "{}" })
 export const depositDemoEscrow = (projectId: string, milestoneId: string, amount?: number, currency = "USD") =>
   api<Payment>("/api/payments/demo-deposit", {
     method: "POST",
@@ -298,9 +308,4 @@ export const activities = [
   { title: "Agreement activated", detail: "Sarah and Alex approved the project terms", time: "Aug 12", type: "spark" },
 ]
 
-export const reviewFindings = [
-  { criterion: "Matches approved designs", status: "Passed", score: 96, evidence: "Layout, spacing, typography, and component states closely match all 8 approved design frames." },
-  { criterion: "Works across modern browsers", status: "Passed", score: 100, evidence: "Automated checks completed in current Chrome, Safari, Firefox, and Edge viewports." },
-  { criterion: "Lighthouse accessibility score above 90", status: "Needs attention", score: 88, evidence: "Two product-card controls need more descriptive accessible labels. Contrast and keyboard navigation passed." },
-]
 
