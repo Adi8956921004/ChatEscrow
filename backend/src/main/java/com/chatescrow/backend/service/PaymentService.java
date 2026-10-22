@@ -111,7 +111,7 @@ public class PaymentService {
      *   - Any other unexpected RuntimeException will roll back the transaction.
      *
      * Amount comparison uses BigDecimal.compareTo (scale-agnostic) so that
-     * "400.0" and "400.00" are treated as equal — preventing false mismatches.
+     * equivalent values with different scales are treated as equal — preventing false mismatches.
      */
     @Transactional(noRollbackFor = {PayPalCaptureTimeoutException.class, PayPalApiException.class})
     public Map<String, Object> captureOrder(String orderId) {
@@ -201,7 +201,7 @@ public class PaymentService {
      * persists final state, fires audit, and builds the response map.
      *
      * Amount comparison uses BigDecimal.compareTo (scale-agnostic) so that
-     * "400.0" and "400.00" are treated as equal.
+     * equivalent values with different decimal scales are treated as equal.
      */
     private Map<String, Object> applyCapture(Payment payment, String orderId,
                                               PayPalService.PayPalCaptureResult result, String caller) {
@@ -218,7 +218,7 @@ public class PaymentService {
                     ? milestone.getCurrency() : payment.getCurrency();
             if (expectedCurrency == null || expectedCurrency.isBlank()) expectedCurrency = "USD";
 
-            // compareTo is scale-agnostic: 400.0.compareTo(400.00) == 0.
+            // compareTo is scale-agnostic (e.g. 50.0.compareTo(50.00) == 0).
             boolean amountMatches = expectedAmount != null && result.amount() != null
                     && expectedAmount.compareTo(result.amount()) == 0;
             boolean currencyMatches = result.currency() == null
@@ -323,16 +323,23 @@ public class PaymentService {
         String resolvedProjectId = projectService.resolveProjectId(projectId);
         projectService.getProject(resolvedProjectId);
 
+        BigDecimal effectiveAmount = amount;
+        String effectiveCurrency = currency != null && !currency.isBlank() ? currency : "USD";
+
         if (milestoneId != null && !milestoneId.isBlank()) {
             Milestone m = milestoneRepo.findById(milestoneId)
                     .orElseThrow(() -> new ResourceNotFoundException("Milestone not found: " + milestoneId));
-            if (amount == null && m.getAmount() != null) {
-                amount = m.getAmount();
+            if (effectiveAmount == null && m.getAmount() != null) {
+                effectiveAmount = m.getAmount();
+            }
+            if (m.getCurrency() != null && !m.getCurrency().isBlank()) {
+                effectiveCurrency = m.getCurrency();
             }
         }
 
-        BigDecimal effectiveAmount = amount != null ? amount : new BigDecimal("400");
-        String effectiveCurrency = currency != null ? currency : "USD";
+        if (effectiveAmount == null || effectiveAmount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Milestone funding amount must be specified and greater than zero");
+        }
 
         Payment payment = Payment.builder()
                 .projectId(resolvedProjectId)

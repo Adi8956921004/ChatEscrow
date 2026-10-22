@@ -494,16 +494,27 @@ function Dashboard({ navigate, projectId }: { navigate: (s: Screen) => void; pro
                 <div className="h-full rounded-full bg-gradient-flow" style={{ width: `${progressPct}%` }} />
               </div>
             </div>
-            <div className="mt-4 grid gap-3 rounded-xl bg-surface p-4 sm:grid-cols-3">
-              <div><p className="text-xs text-muted">Current milestone</p><p className="mt-1 text-sm font-bold text-ink">Frontend Development</p></div>
-              <div><p className="text-xs text-muted">Escrow Amount</p><p className="mt-1 text-sm font-bold text-ink">$400 USD</p></div>
-              <div>
-                <p className="text-xs text-muted">Action</p>
-                <button onClick={() => navigate("review")} className="mt-1 flex items-center gap-1 text-sm font-bold text-primary hover:text-primary-hover">
-                  Open AI Review Gate <Icon name="arrow" size="sm" />
-                </button>
-              </div>
-            </div>
+            {(() => {
+              const activeMilestone = pendingReviewMilestone || milestones.find((m) => m.status !== "RELEASED") || milestones[0]
+              return (
+                <div className="mt-4 grid gap-3 rounded-xl bg-surface p-4 sm:grid-cols-3">
+                  <div>
+                    <p className="text-xs text-muted">Current milestone</p>
+                    <p className="mt-1 text-sm font-bold text-ink">{activeMilestone?.title ?? "Milestone Funding"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted">Escrow Amount</p>
+                    <p className="mt-1 text-sm font-bold text-ink">{activeMilestone ? formatMoney(activeMilestone.amount) : "—"}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs text-muted">Action</p>
+                    <button onClick={() => navigate("review")} className="mt-1 flex items-center gap-1 text-sm font-bold text-primary hover:text-primary-hover">
+                      Open AI Review Gate <Icon name="arrow" size="sm" />
+                    </button>
+                  </div>
+                </div>
+              )
+            })()}
           </div>
         </Card>
 
@@ -2134,7 +2145,7 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
   const [payments, setPayments] = useState<Payment[]>([])
   const [milestones, setMilestones] = useState<Milestone[]>([])
   const [selectedMilestoneId, setSelectedMilestoneId] = useState("")
-  const [amount, setAmount] = useState("400")
+  const [amount, setAmount] = useState("")
   const [loadingPaypal, setLoadingPaypal] = useState(false)
   const [loadingDemoDeposit, setLoadingDemoDeposit] = useState(false)
   const [capturing, setCapturing] = useState(false)
@@ -2183,7 +2194,13 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
   // 1-Click Demo Milestone Deposit
   const handleDemoDeposit = async () => {
     setLoadingDemoDeposit(true); setError(null); setDemoDepositSuccess(null)
-    const parsedAmount = parseFloat(amount) || 400
+    const selected = milestones.find((m) => m.id === selectedMilestoneId)
+    const parsedAmount = parseFloat(amount) || selected?.amount
+    if (!parsedAmount || parsedAmount <= 0) {
+      setError("Please select a milestone with a valid amount.")
+      setLoadingDemoDeposit(false)
+      return
+    }
     try {
       const p = await depositDemoEscrow(projectId, selectedMilestoneId, parsedAmount)
       setPayments((prev) => [p, ...prev])
