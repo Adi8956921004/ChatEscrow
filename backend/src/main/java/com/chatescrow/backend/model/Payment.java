@@ -17,9 +17,11 @@ public class Payment {
     private String provider = "PAYPAL";
     private String providerOrderId;
     private String providerCaptureId;
-    private BigDecimal amount;
+    private BigDecimal amount;            // expected / order amount
+    private BigDecimal capturedAmount;    // what PayPal actually charged (may differ on mismatch)
     @Builder.Default
     private String currency = "USD";
+    private String capturedCurrency;      // currency PayPal actually used (may differ on mismatch)
     @Enumerated(EnumType.STRING)
     @Builder.Default
     private PaymentStatus status = PaymentStatus.NOT_CREATED;

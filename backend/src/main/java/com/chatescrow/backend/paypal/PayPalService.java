@@ -1,5 +1,6 @@
 package com.chatescrow.backend.paypal;
 
+import com.chatescrow.backend.exception.PayPalCaptureTimeoutException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -174,34 +175,50 @@ public class PayPalService {
             String status = result.path("status").asText("UNKNOWN");
             String captureId = null;
             BigDecimal capturedAmount = null;
+            String capturedCurrency = null;
 
             if (result.has("purchase_units")) {
                 JsonNode pu = result.get("purchase_units").get(0);
                 if (pu.has("payments") && pu.get("payments").has("captures")) {
                     JsonNode capture = pu.get("payments").get("captures").get(0);
                     captureId = capture.path("id").asText(null);
-                    if (capture.has("amount") && capture.get("amount").has("value")) {
-                        try {
-                            capturedAmount = new BigDecimal(capture.get("amount").get("value").asText());
-                        } catch (Exception ignored) {}
+                    if (capture.has("amount")) {
+                        JsonNode amtNode = capture.get("amount");
+                        if (amtNode.has("value")) {
+                            try {
+                                capturedAmount = new BigDecimal(amtNode.get("value").asText());
+                            } catch (Exception ignored) {}
+                        }
+                        if (amtNode.has("currency_code")) {
+                            capturedCurrency = amtNode.get("currency_code").asText(null);
+                        }
                     }
                 }
             }
-            return new PayPalCaptureResult(orderId, captureId, status, capturedAmount);
+            return new PayPalCaptureResult(orderId, captureId, status, capturedAmount, capturedCurrency);
         } catch (WebClientResponseException e) {
+            // Definitive HTTP error from PayPal (4xx/5xx) — payment can be marked FAILED.
             String errBody = e.getResponseBodyAsString();
-            log.error("PayPal captureOrder HTTP {} error for orderId={}: {}", e.getStatusCode(), orderId, errBody);
-            throw new RuntimeException("PayPal capture error (" + e.getStatusCode() + "): " + errBody, e);
+            int statusCode = e.getStatusCode().value();
+            log.error("PayPal captureOrder HTTP {} for orderId={}: {}", statusCode, orderId, errBody);
+            throw new com.chatescrow.backend.exception.PayPalApiException(statusCode, errBody, e);
+        } catch (PayPalCaptureTimeoutException e) {
+            throw e;
         } catch (Exception e) {
-            log.error("PayPal captureOrder failed for orderId={}: {}", orderId, e.getMessage());
-            throw new RuntimeException("PayPal capture failed for order " + orderId + ": " + e.getMessage(), e);
+            // Network timeout / connection reset — outcome is UNKNOWN, not definitively failed.
+            // Throw a typed exception so PaymentService can set UNKNOWN, not FAILED.
+            log.error("PayPal captureOrder network/timeout error for orderId={}: {}", orderId, e.getMessage(), e);
+            throw new PayPalCaptureTimeoutException(orderId, e);
         }
     }
 
     /**
-     * Retrieves the current status of a PayPal order for backend verification.
+     * Re-checks an order's current state via GET /v2/checkout/orders/{id}.
+     * Used when the original capture call timed out and the row is UNKNOWN.
+     * If the order was already captured, PayPal returns COMPLETED with the
+     * same purchase_units capture data as the original capture response.
      */
-    public Map<String, Object> getOrderDetails(String orderId) {
+    public PayPalCaptureResult recheckOrder(String orderId) {
         String token = getAccessToken();
         try {
             String response = webClient.get()
@@ -210,10 +227,37 @@ public class PayPalService {
                     .retrieve()
                     .bodyToMono(String.class)
                     .block();
-            JsonNode node = objectMapper.readTree(response);
-            return objectMapper.convertValue(node, Map.class);
+
+            JsonNode result = objectMapper.readTree(response);
+            String status = result.path("status").asText("UNKNOWN");
+            String captureId = null;
+            BigDecimal capturedAmount = null;
+            String capturedCurrency = null;
+
+            if (result.has("purchase_units")) {
+                JsonNode pu = result.get("purchase_units").get(0);
+                if (pu.has("payments") && pu.get("payments").has("captures")) {
+                    JsonNode capture = pu.get("payments").get("captures").get(0);
+                    captureId = capture.path("id").asText(null);
+                    if (capture.has("amount")) {
+                        JsonNode amtNode = capture.get("amount");
+                        if (amtNode.has("value")) {
+                            try { capturedAmount = new BigDecimal(amtNode.get("value").asText()); } catch (Exception ignored) {}
+                        }
+                        if (amtNode.has("currency_code")) {
+                            capturedCurrency = amtNode.get("currency_code").asText(null);
+                        }
+                    }
+                }
+            }
+            return new PayPalCaptureResult(orderId, captureId, status, capturedAmount, capturedCurrency);
+        } catch (WebClientResponseException e) {
+            String errBody = e.getResponseBodyAsString();
+            log.error("PayPal recheckOrder HTTP {} for orderId={}: {}", e.getStatusCode().value(), orderId, errBody);
+            throw new com.chatescrow.backend.exception.PayPalApiException(e.getStatusCode().value(), errBody, e);
         } catch (Exception e) {
-            throw new RuntimeException("Failed to get PayPal order details: " + e.getMessage(), e);
+            log.error("PayPal recheckOrder network error for orderId={}: {}", orderId, e.getMessage(), e);
+            throw new RuntimeException("Failed to re-check PayPal order: " + e.getMessage(), e);
         }
     }
 
@@ -328,7 +372,11 @@ public class PayPalService {
     }
 
     public record PayPalOrderResult(String orderId, String approveUrl, String status) {}
-    public record PayPalCaptureResult(String orderId, String captureId, String status, BigDecimal amount) {}
+    public record PayPalCaptureResult(String orderId, String captureId, String status, BigDecimal amount, String currency) {
+        public PayPalCaptureResult(String orderId, String captureId, String status, BigDecimal amount) {
+            this(orderId, captureId, status, amount, null);
+        }
+    }
     public record PayoutResult(String batchId, String status, boolean isSimulated, String message) {}
 
     public static class PayPalNotConfiguredException extends RuntimeException {

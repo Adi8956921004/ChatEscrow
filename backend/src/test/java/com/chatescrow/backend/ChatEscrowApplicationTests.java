@@ -1,6 +1,8 @@
 package com.chatescrow.backend;
 
 import com.chatescrow.backend.ai.AiService;
+import com.chatescrow.backend.exception.PayPalApiException;
+import com.chatescrow.backend.exception.PayPalCaptureTimeoutException;
 import com.chatescrow.backend.model.*;
 import com.chatescrow.backend.paypal.PayPalService;
 import com.chatescrow.backend.repository.*;
@@ -357,4 +359,213 @@ class ChatEscrowApplicationTests {
         String invalidContract = "{\"deliverables\":[\"App\"]}";
         assertThrows(RuntimeException.class, () -> aiService.validateContractExtractionSchema(invalidContract));
     }
+
+    @Test
+    @DisplayName("Mock PayPal returns CREATED order: response must not be CAPTURED and payment not CAPTURED")
+    void captureReturnsCreatedNotCaptured() throws Exception {
+        Project project = projectService.createProject("Created Order Test", "Desc", "Client", "Freelancer", new BigDecimal("500"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "M-Created", new BigDecimal("500"), "2025-10-30", "D", "AC", "Desc", null);
+
+        Payment payment = Payment.builder()
+                .projectId(project.getId())
+                .milestoneId(m.getId())
+                .amount(new BigDecimal("500"))
+                .currency("USD")
+                .provider("PAYPAL")
+                .providerOrderId("ORD-CREATED-123")
+                .status(Payment.PaymentStatus.APPROVAL_PENDING)
+                .build();
+        paymentRepository.save(payment);
+
+        when(paypalService.captureOrder("ORD-CREATED-123"))
+                .thenReturn(new PayPalService.PayPalCaptureResult("ORD-CREATED-123", null, "CREATED", new BigDecimal("500"), "USD"));
+
+        mockMvc.perform(post("/api/payments/paypal/orders/ORD-CREATED-123/capture"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.status").value("FAILED"))
+                .andExpect(jsonPath("$.status").value(org.hamcrest.Matchers.not("CAPTURED")));
+
+        Payment stored = paymentRepository.findByProviderOrderId("ORD-CREATED-123").orElseThrow();
+        assertNotEquals(Payment.PaymentStatus.CAPTURED, stored.getStatus());
+        assertEquals(Payment.PaymentStatus.FAILED, stored.getStatus());
+    }
+
+    @Test
+    @DisplayName("Mock 422 INSTRUMENT_DECLINED: expect 422 and payment marked FAILED")
+    void captureDeclinedReturns422AndPaymentFailed() throws Exception {
+        Project project = projectService.createProject("Declined Test", "Desc", "Client", "Freelancer", new BigDecimal("400"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "M-Declined", new BigDecimal("400"), "2025-10-30", "D", "AC", "Desc", null);
+
+        Payment payment = Payment.builder()
+                .projectId(project.getId())
+                .milestoneId(m.getId())
+                .amount(new BigDecimal("400"))
+                .currency("USD")
+                .provider("PAYPAL")
+                .providerOrderId("ORD-DECLINED-422")
+                .status(Payment.PaymentStatus.APPROVAL_PENDING)
+                .build();
+        paymentRepository.save(payment);
+
+        String rawError = "{\"name\":\"UNPROCESSABLE_ENTITY\",\"message\":\"The requested action failed business validation.\",\"debug_id\":\"dbg-422-inst\",\"details\":[{\"issue\":\"INSTRUMENT_DECLINED\",\"description\":\"The instrument presented was declined\"}]}";
+        when(paypalService.captureOrder("ORD-DECLINED-422"))
+                .thenThrow(new PayPalApiException(422, rawError));
+
+        mockMvc.perform(post("/api/payments/paypal/orders/ORD-DECLINED-422/capture"))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("INSTRUMENT_DECLINED")))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("dbg-422-inst"))));
+
+        Payment stored = paymentRepository.findByProviderOrderId("ORD-DECLINED-422").orElseThrow();
+        assertEquals(Payment.PaymentStatus.FAILED, stored.getStatus());
+    }
+
+    @Test
+    @DisplayName("Mock PayPal 5xx: expect 502 and no payment marked captured")
+    void capture5xxReturns502AndPaymentNotCaptured() throws Exception {
+        Project project = projectService.createProject("5xx Test", "Desc", "Client", "Freelancer", new BigDecimal("350"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "M-500", new BigDecimal("350"), "2025-10-30", "D", "AC", "Desc", null);
+
+        Payment payment = Payment.builder()
+                .projectId(project.getId())
+                .milestoneId(m.getId())
+                .amount(new BigDecimal("350"))
+                .currency("USD")
+                .provider("PAYPAL")
+                .providerOrderId("ORD-500-ERR")
+                .status(Payment.PaymentStatus.APPROVAL_PENDING)
+                .build();
+        paymentRepository.save(payment);
+
+        String raw500 = "{\"name\":\"INTERNAL_SERVER_ERROR\",\"message\":\"An internal server error occurred.\",\"debug_id\":\"dbg-500-paypal\"}";
+        when(paypalService.captureOrder("ORD-500-ERR"))
+                .thenThrow(new PayPalApiException(500, raw500));
+
+        mockMvc.perform(post("/api/payments/paypal/orders/ORD-500-ERR/capture"))
+                .andExpect(status().isBadGateway())
+                .andExpect(jsonPath("$.status").value(502))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.containsString("dbg-500-paypal"))));
+
+        Payment stored = paymentRepository.findByProviderOrderId("ORD-500-ERR").orElseThrow();
+        assertNotEquals(Payment.PaymentStatus.CAPTURED, stored.getStatus());
+        assertEquals(Payment.PaymentStatus.FAILED, stored.getStatus());
+    }
+
+    @Test
+    @DisplayName("Amount differs from milestone amount: expect not CAPTURED")
+    void captureAmountMismatchNotCaptured() throws Exception {
+        Project project = projectService.createProject("Mismatch Test", "Desc", "Client", "Freelancer", new BigDecimal("400"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "M-Mismatch", new BigDecimal("400"), "2025-10-30", "D", "AC", "Desc", null);
+
+        Payment payment = Payment.builder()
+                .projectId(project.getId())
+                .milestoneId(m.getId())
+                .amount(new BigDecimal("400"))
+                .currency("USD")
+                .provider("PAYPAL")
+                .providerOrderId("ORD-MISMATCH-AMT")
+                .status(Payment.PaymentStatus.APPROVAL_PENDING)
+                .build();
+        paymentRepository.save(payment);
+
+        // PayPal returned COMPLETED, but for $150 instead of milestone's $400
+        when(paypalService.captureOrder("ORD-MISMATCH-AMT"))
+                .thenReturn(new PayPalService.PayPalCaptureResult("ORD-MISMATCH-AMT", "CAP-150", "COMPLETED", new BigDecimal("150.00"), "USD"));
+
+        mockMvc.perform(post("/api/payments/paypal/orders/ORD-MISMATCH-AMT/capture"))
+                .andExpect(status().isConflict())   // 409: indeterminate, not a bad client request
+                .andExpect(jsonPath("$.status").value(org.hamcrest.Matchers.not("CAPTURED")))
+                .andExpect(jsonPath("$.status").value("UNKNOWN"))
+                .andExpect(jsonPath("$.mismatch").value(true))
+                .andExpect(jsonPath("$.capturedAmount").value("150.00"));
+
+        Payment stored = paymentRepository.findByProviderOrderId("ORD-MISMATCH-AMT").orElseThrow();
+        assertNotEquals(Payment.PaymentStatus.CAPTURED, stored.getStatus());
+        assertEquals(Payment.PaymentStatus.UNKNOWN, stored.getStatus());
+        // Real captured values must be persisted so reconciliation / refund is possible.
+        assertNotNull(stored.getCapturedAmount());
+        assertEquals(0, new BigDecimal("150.00").compareTo(stored.getCapturedAmount()));
+        assertEquals("USD", stored.getCapturedCurrency());
+        // Capture ID should be stored too so PayPal support can look it up.
+        assertEquals("CAP-150", stored.getProviderCaptureId());
+    }
+
+    @Test
+    @DisplayName("Network timeout maps to UNKNOWN state, not FAILED, returning 504 Gateway Timeout")
+    void captureTimeoutMapsToUnknownAnd504() throws Exception {
+        Project project = projectService.createProject("Timeout Test", "Desc", "Client", "Freelancer", new BigDecimal("400"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "M-Timeout", new BigDecimal("400"), "2025-10-30", "D", "AC", "Desc", null);
+
+        Payment payment = Payment.builder()
+                .projectId(project.getId())
+                .milestoneId(m.getId())
+                .amount(new BigDecimal("400"))
+                .currency("USD")
+                .provider("PAYPAL")
+                .providerOrderId("ORD-TIMEOUT-NET")
+                .status(Payment.PaymentStatus.APPROVAL_PENDING)
+                .build();
+        paymentRepository.save(payment);
+
+        when(paypalService.captureOrder("ORD-TIMEOUT-NET"))
+                .thenThrow(new PayPalCaptureTimeoutException("ORD-TIMEOUT-NET", new java.util.concurrent.TimeoutException("Read timed out")));
+
+        mockMvc.perform(post("/api/payments/paypal/orders/ORD-TIMEOUT-NET/capture"))
+                .andExpect(status().isGatewayTimeout())
+                .andExpect(jsonPath("$.status").value(504))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("UNKNOWN")));
+
+        Payment stored = paymentRepository.findByProviderOrderId("ORD-TIMEOUT-NET").orElseThrow();
+        assertEquals(Payment.PaymentStatus.UNKNOWN, stored.getStatus());
+        assertNotEquals(Payment.PaymentStatus.FAILED, stored.getStatus());
+        assertNotEquals(Payment.PaymentStatus.CAPTURED, stored.getStatus());
+    }
+
+    @Test
+    @DisplayName("IllegalStateException returns 409 CONFLICT rather than 500")
+    void illegalStateExceptionReturns409Conflict() throws Exception {
+        Project project = projectService.createProject("Conflict Test", "Desc", "Client", "Freelancer", new BigDecimal("200"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "M-Conflict", new BigDecimal("200"), "2025-10-30", "D", "AC", "Desc", null);
+
+        // Attempting to release milestone that is neither submitted nor accepted nor funded throws IllegalStateException
+        mockMvc.perform(post("/api/milestones/" + m.getId() + "/release")
+                        .header("X-Actor-Role", "client")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"recipientEmail\":\"f@example.com\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409))
+                .andExpect(jsonPath("$.error").value("Conflict"));
+    }
+
+    @Test
+    @DisplayName("Capture COMPLETED maps to CAPTURED when amount and currency match")
+    void captureCompletedMapsToCapturedWhenAmountMatches() throws Exception {
+        Project project = projectService.createProject("Success Capture", "Desc", "Client", "Freelancer", new BigDecimal("400"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "M-Success", new BigDecimal("400"), "2025-10-30", "D", "AC", "Desc", null);
+
+        Payment payment = Payment.builder()
+                .projectId(project.getId())
+                .milestoneId(m.getId())
+                .amount(new BigDecimal("400"))
+                .currency("USD")
+                .provider("PAYPAL")
+                .providerOrderId("ORD-SUCCESS-200")
+                .status(Payment.PaymentStatus.APPROVAL_PENDING)
+                .build();
+        paymentRepository.save(payment);
+
+        when(paypalService.captureOrder("ORD-SUCCESS-200"))
+                .thenReturn(new PayPalService.PayPalCaptureResult("ORD-SUCCESS-200", "CAP-SUCCESS-999", "COMPLETED", new BigDecimal("400.00"), "USD"));
+
+        mockMvc.perform(post("/api/payments/paypal/orders/ORD-SUCCESS-200/capture"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CAPTURED"))
+                .andExpect(jsonPath("$.providerStatus").value("COMPLETED"))
+                .andExpect(jsonPath("$.captureId").value("CAP-SUCCESS-999"));
+
+        Payment stored = paymentRepository.findByProviderOrderId("ORD-SUCCESS-200").orElseThrow();
+        assertEquals(Payment.PaymentStatus.CAPTURED, stored.getStatus());
+        assertEquals("CAP-SUCCESS-999", stored.getProviderCaptureId());
+    }
 }
+

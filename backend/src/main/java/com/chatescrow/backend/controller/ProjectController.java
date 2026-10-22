@@ -126,7 +126,8 @@ public class ProjectController {
     }
 
     /**
-     * Captures PayPal order. Returns 200 on success, or 4xx on failure.
+     * Captures PayPal order. Returns 200 on CAPTURED, 409 on UNKNOWN (indeterminate / mismatch),
+     * or 422 on a definitive failure.
      */
     @PostMapping("/payments/paypal/orders/{orderId}/capture")
     public ResponseEntity<Map<String, Object>> captureOrder(@PathVariable String orderId) {
@@ -136,8 +137,29 @@ public class ProjectController {
             return ResponseEntity.ok(result);
         } else if ("FAILED".equalsIgnoreCase(status)) {
             return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(result);
+        } else if ("UNKNOWN".equalsIgnoreCase(status)) {
+            // Payment outcome is indeterminate (timeout or amount mismatch).
+            // 409 Conflict: the request was valid but the outcome cannot be confirmed.
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(result);
         } else {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(result);
+        }
+    }
+
+    /**
+     * Re-checks an UNKNOWN payment by calling GET /v2/checkout/orders/{id} on PayPal.
+     * Use after a timeout or amount-mismatch to confirm whether money was actually taken.
+     */
+    @PostMapping("/payments/paypal/orders/{orderId}/recheck")
+    public ResponseEntity<Map<String, Object>> recheckPayment(@PathVariable String orderId) {
+        Map<String, Object> result = paymentService.recheckPayment(orderId);
+        String status = (String) result.get("status");
+        if ("CAPTURED".equalsIgnoreCase(status)) {
+            return ResponseEntity.ok(result);
+        } else if ("UNKNOWN".equalsIgnoreCase(status)) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(result);
+        } else {
+            return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(result);
         }
     }
 
