@@ -26,10 +26,6 @@ Thumbs.db
 
 # In-memory H2 database files (if persistent)
 *.h2.db
-*.trace.db
-
 # Patch & review notes
 *.patch
 instruction_from_me.md
-
-

@@ -22,6 +22,38 @@ public class ProjectController {
     private final PaymentService paymentService;
     private final SecurityService securityService;
 
+    public record CreateProjectRequest(
+            String title,
+            String description,
+            String clientName,
+            String clientEmail,
+            String freelancerName,
+            String freelancerEmail,
+            BigDecimal totalBudget,
+            String currency
+    ) {}
+
+    public record CreateMilestoneRequest(
+            String title,
+            BigDecimal amount,
+            String dueDate,
+            String deliverables,
+            String acceptanceCriteria,
+            String description,
+            String contractVersionId
+    ) {}
+
+    public record CreateOrderRequest(
+            String projectId,
+            String milestoneId,
+            String currency
+    ) {}
+
+    public record DemoDepositRequest(
+            String projectId,
+            String milestoneId
+    ) {}
+
     // --- Projects ---
     @GetMapping("/projects")
     public List<Project> listProjects() {
@@ -34,18 +66,19 @@ public class ProjectController {
     }
 
     @PostMapping("/projects")
-    public ResponseEntity<Project> createProject(@RequestBody Map<String, Object> body) {
-        String title = (String) body.get("title");
-        String description = (String) body.get("description");
-        String clientName = (String) body.getOrDefault("clientName", "Client");
-        String clientEmail = (String) body.get("clientEmail");
-        String freelancerName = (String) body.getOrDefault("freelancerName", "Freelancer");
-        String freelancerEmail = (String) body.get("freelancerEmail");
-        BigDecimal budget = body.get("totalBudget") != null
-                ? new BigDecimal(body.get("totalBudget").toString()) : null;
-        String currency = (String) body.getOrDefault("currency", "USD");
-        Project p = projectService.createProject(title, description, clientName, clientEmail,
-                freelancerName, freelancerEmail, budget, currency);
+    public ResponseEntity<Project> createProject(@RequestBody CreateProjectRequest body) {
+        String clientName = body.clientName() != null ? body.clientName() : "Client";
+        String freelancerName = body.freelancerName() != null ? body.freelancerName() : "Freelancer";
+        String currency = body.currency() != null ? body.currency() : "USD";
+        Project p = projectService.createProject(
+                body.title(),
+                body.description(),
+                clientName,
+                body.clientEmail(),
+                freelancerName,
+                body.freelancerEmail(),
+                body.totalBudget(),
+                currency);
         return ResponseEntity.ok(p);
     }
 
@@ -57,8 +90,10 @@ public class ProjectController {
 
     @PostMapping("/projects/{projectId}/contract-drafts")
     public ResponseEntity<ContractVersion> generateDraft(@PathVariable String projectId,
-                                                          @RequestBody Map<String, String> body) {
-        String conversation = body.get("conversationText");
+                                                          @RequestBody Map<String, String> body,
+                                                          HttpServletRequest request) {
+        securityService.requireParticipant(request);
+        String conversation = body != null ? body.get("conversationText") : null;
         if (conversation == null || conversation.isBlank()) {
             return ResponseEntity.badRequest().build();
         }
@@ -68,9 +103,11 @@ public class ProjectController {
     @PutMapping("/projects/{projectId}/contract-drafts/{draftId}")
     public ResponseEntity<ContractVersion> saveDraft(@PathVariable String projectId,
                                                       @PathVariable String draftId,
-                                                      @RequestBody Map<String, String> body) {
-        String termsJson = body.get("termsJson");
-        return ResponseEntity.ok(contractService.saveDraft(projectId, termsJson));
+                                                      @RequestBody Map<String, String> body,
+                                                      HttpServletRequest request) {
+        securityService.requireParticipant(request);
+        String termsJson = body != null ? body.get("termsJson") : null;
+        return ResponseEntity.ok(contractService.saveDraft(projectId, draftId, termsJson));
     }
 
     /**
@@ -100,19 +137,12 @@ public class ProjectController {
      */
     @PostMapping("/projects/{projectId}/milestones")
     public ResponseEntity<Milestone> createMilestone(@PathVariable String projectId,
-                                                      @RequestBody Map<String, Object> body,
+                                                      @RequestBody CreateMilestoneRequest body,
                                                       HttpServletRequest request) {
         securityService.requireClient(request);
-        String title = (String) body.get("title");
-        BigDecimal amount = body.get("amount") != null
-                ? new BigDecimal(body.get("amount").toString()) : null;
-        String dueDate = (String) body.get("dueDate");
-        String deliverables = (String) body.get("deliverables");
-        String criteria = (String) body.get("acceptanceCriteria");
-        String description = (String) body.get("description");
-        String contractVersionId = (String) body.get("contractVersionId");
         return ResponseEntity.ok(projectService.createMilestone(
-                projectId, title, amount, dueDate, deliverables, criteria, description, contractVersionId));
+                projectId, body.title(), body.amount(), body.dueDate(),
+                body.deliverables(), body.acceptanceCriteria(), body.description(), body.contractVersionId()));
     }
 
     // --- Timeline ---
@@ -126,11 +156,9 @@ public class ProjectController {
      * Creates PayPal order. Amount is looked up server-side from milestone to prevent client tampering.
      */
     @PostMapping("/payments/paypal/orders")
-    public ResponseEntity<Map<String, Object>> createOrder(@RequestBody Map<String, Object> body) {
-        String projectId = (String) body.get("projectId");
-        String milestoneId = (String) body.get("milestoneId");
-        String currency = (String) body.getOrDefault("currency", "USD");
-        return ResponseEntity.ok(paymentService.createOrder(projectId, milestoneId, currency));
+    public ResponseEntity<Map<String, Object>> createOrder(@RequestBody CreateOrderRequest body) {
+        String currency = body.currency() != null ? body.currency() : "USD";
+        return ResponseEntity.ok(paymentService.createOrder(body.projectId(), body.milestoneId(), currency));
     }
 
     /**
@@ -177,12 +205,10 @@ public class ProjectController {
      * to prevent client tampering.
      */
     @PostMapping("/payments/demo-deposit")
-    public ResponseEntity<Payment> demoDeposit(@RequestBody Map<String, Object> body,
+    public ResponseEntity<Payment> demoDeposit(@RequestBody DemoDepositRequest body,
                                                HttpServletRequest request) {
         securityService.requireClient(request);
-        String projectId = (String) body.get("projectId");
-        String milestoneId = (String) body.get("milestoneId");
-        return ResponseEntity.ok(paymentService.recordDemoPayment(projectId, milestoneId));
+        return ResponseEntity.ok(paymentService.recordDemoPayment(body.projectId(), body.milestoneId()));
     }
 
     /**
@@ -209,7 +235,7 @@ public class ProjectController {
             "service", "chatescrow-backend",
             "status", "UP",
             "paypalConfigured", paymentService.isPaypalConfigured(),
-            "sandbox", true,
+            "sandbox", paymentService.isSandbox(),
             "note", "ChatEscrow Prototype. Milestone payment workflow ledger."
         );
     }

@@ -27,26 +27,32 @@ public class SecurityService {
         String role = null;
         String actorId = null;
 
-        // The role comes only from the bearer token. X-Actor-Role is never trusted.
+        // The role and actor identity come strictly from the bearer token.
+        // X-Actor-Id header is not trusted to prevent spoofing of the audit trail.
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring(7).trim();
             if (tokenMatches(token, clientToken)) {
                 role = "client";
-                actorId = "client";
+                actorId = "Sarah Miller";
             } else if (tokenMatches(token, freelancerToken)) {
                 role = "freelancer";
-                actorId = "freelancer";
+                actorId = "Alex Carter";
             }
         }
 
-        // X-Actor-Id is a display label for the audit trail only; it never grants a role.
-        if (actorIdHeader != null && !actorIdHeader.isBlank()) {
-            actorId = actorIdHeader.trim();
-        } else if (actorId == null) {
+        if (actorId == null) {
             actorId = "anonymous";
         }
 
         return new CurrentActor(actorId, role);
+    }
+
+    public CurrentActor requireParticipant(HttpServletRequest request) {
+        CurrentActor actor = resolveActor(request);
+        if (actor.role() == null || (!"client".equalsIgnoreCase(actor.role()) && !"freelancer".equalsIgnoreCase(actor.role()))) {
+            throw new ForbiddenException("Access denied: only authorized project participants may perform this action.");
+        }
+        return actor;
     }
 
     private static boolean tokenMatches(String presented, String expected) {

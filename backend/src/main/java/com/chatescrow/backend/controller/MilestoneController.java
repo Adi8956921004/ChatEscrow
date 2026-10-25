@@ -44,7 +44,9 @@ public class MilestoneController {
     }
 
     @PostMapping("/submissions/{submissionId}/evaluate")
-    public ResponseEntity<AcceptanceReport> evaluateSubmission(@PathVariable String submissionId) {
+    public ResponseEntity<AcceptanceReport> evaluateSubmission(@PathVariable String submissionId,
+                                                              HttpServletRequest request) {
+        securityService.requireParticipant(request);
         return ResponseEntity.ok(milestoneService.evaluateSubmission(submissionId));
     }
 
