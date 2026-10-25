@@ -28,7 +28,8 @@ Thumbs.db
 *.h2.db
 *.trace.db
 
-# Review & internal prompt notes
+# Patch & review notes
+*.patch
 instruction_from_me.md
-review_*.md
+
 
