@@ -11,32 +11,29 @@ public class SecurityService {
 
     public CurrentActor resolveActor(HttpServletRequest request) {
         String authHeader = request.getHeader("Authorization");
-        String roleHeader = request.getHeader("X-Actor-Role");
         String actorIdHeader = request.getHeader("X-Actor-Id");
 
         String role = null;
         String actorId = null;
 
+        // Role is determined solely from the Bearer token — not from X-Actor-Role.
+        // X-Actor-Role is accepted by CORS for frontend convenience but is not trusted for authorization.
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring(7).trim();
-            if ("client-demo-token".equalsIgnoreCase(token) || "client".equalsIgnoreCase(token)) {
+            if ("client-demo-token".equalsIgnoreCase(token)) {
                 role = "client";
                 actorId = "client";
-            } else if ("freelancer-demo-token".equalsIgnoreCase(token) || "freelancer".equalsIgnoreCase(token)) {
+            } else if ("freelancer-demo-token".equalsIgnoreCase(token)) {
                 role = "freelancer";
                 actorId = "freelancer";
             }
         }
 
-        if (role == null && roleHeader != null && !roleHeader.isBlank()) {
-            String r = roleHeader.trim().toLowerCase();
-            if ("client".equals(r) || "freelancer".equals(r)) {
-                role = r;
-            }
-        }
-
-        if (actorId == null) {
-            actorId = (actorIdHeader != null && !actorIdHeader.isBlank()) ? actorIdHeader.trim() : (role != null ? role : "anonymous");
+        // X-Actor-Id may be used for audit/display purposes only; it does not grant a role.
+        if (actorIdHeader != null && !actorIdHeader.isBlank()) {
+            actorId = actorIdHeader.trim();
+        } else if (actorId == null) {
+            actorId = "anonymous";
         }
 
         return new CurrentActor(actorId, role);

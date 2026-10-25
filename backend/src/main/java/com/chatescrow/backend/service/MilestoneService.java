@@ -178,7 +178,12 @@ public class MilestoneService {
      * 4. Provider distinction: a DEMO_ESCROW payment produces a DEMO_SIMULATED payout status.
      */
     @Transactional
-    public Map<String, Object> releaseMilestone(String milestoneId, String actorId, String recipientEmail) {
+    public Map<String, Object> releaseMilestone(String milestoneId, String actorId) {
+        return releaseMilestone(milestoneId, actorId, null);
+    }
+
+    @Transactional
+    public Map<String, Object> releaseMilestone(String milestoneId, String actorId, String ignoredRecipientEmail) {
         Milestone m = getMilestone(milestoneId);
         if (m.getStatus() != Milestone.MilestoneStatus.ACCEPTED) {
             throw new IllegalStateException("Milestone cannot be released unless it is in ACCEPTED status. Current: " + m.getStatus());
@@ -218,8 +223,13 @@ public class MilestoneService {
                 .allMatch(p -> "DEMO_ESCROW".equalsIgnoreCase(p.getProvider()));
 
         Project project = projectService.getProject(m.getProjectId());
-        String effectiveRecipient = (recipientEmail != null && !recipientEmail.isBlank())
-                ? recipientEmail : project.getFreelancerName().toLowerCase().replace(" ", "") + "@example.com";
+
+        // Always use the stored freelancer email — never trust a recipient supplied in the request body.
+        // The recipientEmail parameter is intentionally ignored here.
+        String storedFreelancerEmail = project.getFreelancerEmail();
+        String effectiveRecipient = (storedFreelancerEmail != null && !storedFreelancerEmail.isBlank())
+                ? storedFreelancerEmail
+                : project.getFreelancerName().toLowerCase().replace(" ", "") + "@example.com";
 
         BigDecimal releaseAmount = m.getAmount() != null ? m.getAmount() : BigDecimal.ZERO;
         String releaseCurrency = m.getCurrency() != null ? m.getCurrency() : "USD";

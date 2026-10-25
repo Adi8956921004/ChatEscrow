@@ -89,14 +89,13 @@ public class MilestoneController {
 
     /**
      * Release milestone payout. Only the client role may authorize a release.
+     * Recipient is strictly derived from the stored project freelancer record.
      */
     @PostMapping("/milestones/{milestoneId}/release")
     public ResponseEntity<?> releaseMilestone(@PathVariable String milestoneId,
-                                              @RequestBody(required = false) Map<String, String> body,
                                               HttpServletRequest request) {
         SecurityService.CurrentActor actor = securityService.requireClient(request);
-        String recipientEmail = body != null ? body.get("recipientEmail") : null;
-        return ResponseEntity.ok(milestoneService.releaseMilestone(milestoneId, actor.actorId(), recipientEmail));
+        return ResponseEntity.ok(milestoneService.releaseMilestone(milestoneId, actor.actorId()));
     }
 
     @GetMapping("/milestones/{milestoneId}/dispute-pack")

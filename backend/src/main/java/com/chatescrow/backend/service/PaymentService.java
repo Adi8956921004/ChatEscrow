@@ -319,26 +319,31 @@ public class PaymentService {
     // ── Demo & ancillary payments ──────────────────────────────────────────
 
     @Transactional
-    public Payment recordDemoPayment(String projectId, String milestoneId, BigDecimal amount, String currency) {
+    public Payment recordDemoPayment(String projectId, String milestoneId) {
+        return recordDemoPayment(projectId, milestoneId, null, null);
+    }
+
+    @Transactional
+    public Payment recordDemoPayment(String projectId, String milestoneId, BigDecimal ignoredAmount, String ignoredCurrency) {
         String resolvedProjectId = projectService.resolveProjectId(projectId);
         projectService.getProject(resolvedProjectId);
 
-        BigDecimal effectiveAmount = amount;
-        String effectiveCurrency = currency != null && !currency.isBlank() ? currency : "USD";
+        BigDecimal effectiveAmount;
+        String effectiveCurrency;
 
         if (milestoneId != null && !milestoneId.isBlank()) {
+            // Always use the milestone's stored amount/currency — ignore whatever the client sent in the body.
             Milestone m = milestoneRepo.findById(milestoneId)
                     .orElseThrow(() -> new ResourceNotFoundException("Milestone not found: " + milestoneId));
-            if (effectiveAmount == null && m.getAmount() != null) {
-                effectiveAmount = m.getAmount();
-            }
-            if (m.getCurrency() != null && !m.getCurrency().isBlank()) {
-                effectiveCurrency = m.getCurrency();
-            }
+            effectiveAmount = m.getAmount();
+            effectiveCurrency = (m.getCurrency() != null && !m.getCurrency().isBlank()) ? m.getCurrency() : "USD";
+        } else {
+            // No milestoneId supplied — this path should not normally be reached for demo deposits.
+            throw new IllegalArgumentException("Milestone ID is required for a demo deposit");
         }
 
         if (effectiveAmount == null || effectiveAmount.compareTo(BigDecimal.ZERO) <= 0) {
-            throw new IllegalArgumentException("Milestone funding amount must be specified and greater than zero");
+            throw new IllegalArgumentException("Milestone has no valid amount set — cannot record demo deposit");
         }
 
         Payment payment = Payment.builder()

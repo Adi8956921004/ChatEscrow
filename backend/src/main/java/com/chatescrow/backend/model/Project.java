@@ -16,8 +16,10 @@ public class Project {
     private String description;
     private String clientId;
     private String clientName;
+    private String clientEmail;
     private String freelancerId;
     private String freelancerName;
+    private String freelancerEmail;
     @Builder.Default
     private String currency = "USD";
     @Enumerated(EnumType.STRING)

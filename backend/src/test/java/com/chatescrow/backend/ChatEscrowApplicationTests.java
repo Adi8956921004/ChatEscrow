@@ -94,7 +94,9 @@ class ChatEscrowApplicationTests {
                 "Mobile App Redesign",
                 "Redesign React Native mobile application",
                 "Alice Client",
+                "alice@example.com",
                 "Bob Dev",
+                "bob@example.com",
                 new BigDecimal("2500"),
                 "USD"
         );
@@ -190,7 +192,7 @@ class ChatEscrowApplicationTests {
     @Test
     @DisplayName("Role spoofing on accept and release is blocked (HTTP 403)")
     void roleSpoofingBlocked() throws Exception {
-        Project project = projectService.createProject("Role Security Project", "Testing spoofing", "Sarah", "Alex", new BigDecimal("500"), "USD");
+        Project project = projectService.createProject("Role Security Project", "Testing spoofing", "Sarah", null, "Alex", null, new BigDecimal("500"), "USD");
         Milestone m = projectService.createMilestone(project.getId(), "Task 1", new BigDecimal("500"), "2025-10-30", "Code", "Pass", "Desc", null);
 
         // Submit evidence as freelancer
@@ -222,7 +224,7 @@ class ChatEscrowApplicationTests {
     @Test
     @DisplayName("Failed capture and 422 from PayPal returns 4xx error status")
     void failedCaptureReturnsErrorStatus() throws Exception {
-        Project project = projectService.createProject("Capture Test", "Testing capture failure", "C", "F", new BigDecimal("400"), "USD");
+        Project project = projectService.createProject("Capture Test", "Testing capture failure", "C", null, "F", null, new BigDecimal("400"), "USD");
         Milestone m = projectService.createMilestone(project.getId(), "M422", new BigDecimal("400"), "2025-10-30", "D", "AC", "Desc", null);
 
         Payment payment = Payment.builder()
@@ -276,7 +278,7 @@ class ChatEscrowApplicationTests {
     @Test
     @DisplayName("Double release returns same payout idempotently")
     void doubleReleaseReturnsSamePayoutIdempotently() {
-        Project project = projectService.createProject("Idempotent Release", "Testing double release", "Client", "Dev", new BigDecimal("300"), "USD");
+        Project project = projectService.createProject("Idempotent Release", "Testing double release", "Client", null, "Dev", "dev@example.com", new BigDecimal("300"), "USD");
         Milestone m = projectService.createMilestone(project.getId(), "Milestone Release", new BigDecimal("300"), "2025-10-30", "Work", "Good", "Desc", null);
 
         milestoneService.submitEvidence(m.getId(), "Dev", "Finished", "link", "file");
@@ -310,7 +312,7 @@ class ChatEscrowApplicationTests {
     @Test
     @DisplayName("Release with only DEMO_ESCROW payment produces DEMO_SIMULATED release status")
     void releaseWithDemoEscrowProducesDemoSimulated() {
-        Project project = projectService.createProject("Simulated Release", "Testing simulated payout", "Sarah", "Alex", new BigDecimal("250"), "USD");
+        Project project = projectService.createProject("Simulated Release", "Testing simulated payout", "Sarah", null, "Alex", "alex@example.com", new BigDecimal("250"), "USD");
         Milestone m = projectService.createMilestone(project.getId(), "Design Phase", new BigDecimal("250"), "2025-10-30", "Figma", "Pixel perfect", "Desc", null);
 
         milestoneService.submitEvidence(m.getId(), "Alex", "Designs uploaded", "figma.com", "spec.pdf");
@@ -363,7 +365,7 @@ class ChatEscrowApplicationTests {
     @Test
     @DisplayName("Mock PayPal returns CREATED order: response must not be CAPTURED and payment not CAPTURED")
     void captureReturnsCreatedNotCaptured() throws Exception {
-        Project project = projectService.createProject("Created Order Test", "Desc", "Client", "Freelancer", new BigDecimal("500"), "USD");
+        Project project = projectService.createProject("Created Order Test", "Desc", "Client", null, "Freelancer", null, new BigDecimal("500"), "USD");
         Milestone m = projectService.createMilestone(project.getId(), "M-Created", new BigDecimal("500"), "2025-10-30", "D", "AC", "Desc", null);
 
         Payment payment = Payment.builder()
@@ -393,7 +395,7 @@ class ChatEscrowApplicationTests {
     @Test
     @DisplayName("Mock 422 INSTRUMENT_DECLINED: expect 422 and payment marked FAILED")
     void captureDeclinedReturns422AndPaymentFailed() throws Exception {
-        Project project = projectService.createProject("Declined Test", "Desc", "Client", "Freelancer", new BigDecimal("400"), "USD");
+        Project project = projectService.createProject("Declined Test", "Desc", "Client", null, "Freelancer", null, new BigDecimal("400"), "USD");
         Milestone m = projectService.createMilestone(project.getId(), "M-Declined", new BigDecimal("400"), "2025-10-30", "D", "AC", "Desc", null);
 
         Payment payment = Payment.builder()
@@ -423,7 +425,7 @@ class ChatEscrowApplicationTests {
     @Test
     @DisplayName("Mock PayPal 5xx: expect 502 and no payment marked captured")
     void capture5xxReturns502AndPaymentNotCaptured() throws Exception {
-        Project project = projectService.createProject("5xx Test", "Desc", "Client", "Freelancer", new BigDecimal("350"), "USD");
+        Project project = projectService.createProject("5xx Test", "Desc", "Client", null, "Freelancer", null, new BigDecimal("350"), "USD");
         Milestone m = projectService.createMilestone(project.getId(), "M-500", new BigDecimal("350"), "2025-10-30", "D", "AC", "Desc", null);
 
         Payment payment = Payment.builder()
@@ -454,7 +456,7 @@ class ChatEscrowApplicationTests {
     @Test
     @DisplayName("Amount differs from milestone amount: expect not CAPTURED")
     void captureAmountMismatchNotCaptured() throws Exception {
-        Project project = projectService.createProject("Mismatch Test", "Desc", "Client", "Freelancer", new BigDecimal("400"), "USD");
+        Project project = projectService.createProject("Mismatch Test", "Desc", "Client", null, "Freelancer", null, new BigDecimal("400"), "USD");
         Milestone m = projectService.createMilestone(project.getId(), "M-Mismatch", new BigDecimal("400"), "2025-10-30", "D", "AC", "Desc", null);
 
         Payment payment = Payment.builder()
@@ -493,7 +495,7 @@ class ChatEscrowApplicationTests {
     @Test
     @DisplayName("Network timeout maps to UNKNOWN state, not FAILED, returning 504 Gateway Timeout")
     void captureTimeoutMapsToUnknownAnd504() throws Exception {
-        Project project = projectService.createProject("Timeout Test", "Desc", "Client", "Freelancer", new BigDecimal("400"), "USD");
+        Project project = projectService.createProject("Timeout Test", "Desc", "Client", null, "Freelancer", null, new BigDecimal("400"), "USD");
         Milestone m = projectService.createMilestone(project.getId(), "M-Timeout", new BigDecimal("400"), "2025-10-30", "D", "AC", "Desc", null);
 
         Payment payment = Payment.builder()
@@ -524,12 +526,13 @@ class ChatEscrowApplicationTests {
     @Test
     @DisplayName("IllegalStateException returns 409 CONFLICT rather than 500")
     void illegalStateExceptionReturns409Conflict() throws Exception {
-        Project project = projectService.createProject("Conflict Test", "Desc", "Client", "Freelancer", new BigDecimal("200"), "USD");
+        Project project = projectService.createProject("Conflict Test", "Desc", "Client", null, "Freelancer", null, new BigDecimal("200"), "USD");
         Milestone m = projectService.createMilestone(project.getId(), "M-Conflict", new BigDecimal("200"), "2025-10-30", "D", "AC", "Desc", null);
 
         // Attempting to release milestone that is neither submitted nor accepted nor funded throws IllegalStateException
+        // Must present a valid client token — X-Actor-Role alone no longer grants a role.
         mockMvc.perform(post("/api/milestones/" + m.getId() + "/release")
-                        .header("X-Actor-Role", "client")
+                        .header("Authorization", "Bearer client-demo-token")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"recipientEmail\":\"f@example.com\"}"))
                 .andExpect(status().isConflict())
@@ -540,7 +543,7 @@ class ChatEscrowApplicationTests {
     @Test
     @DisplayName("Capture COMPLETED maps to CAPTURED when amount and currency match")
     void captureCompletedMapsToCapturedWhenAmountMatches() throws Exception {
-        Project project = projectService.createProject("Success Capture", "Desc", "Client", "Freelancer", new BigDecimal("400"), "USD");
+        Project project = projectService.createProject("Success Capture", "Desc", "Client", null, "Freelancer", null, new BigDecimal("400"), "USD");
         Milestone m = projectService.createMilestone(project.getId(), "M-Success", new BigDecimal("400"), "2025-10-30", "D", "AC", "Desc", null);
 
         Payment payment = Payment.builder()

@@ -44,12 +44,15 @@ public class ProjectService {
 
     @Transactional
     public Project createProject(String title, String description, String clientName,
-                                  String freelancerName, BigDecimal budget, String currency) {
+                                  String clientEmail, String freelancerName, String freelancerEmail,
+                                  BigDecimal budget, String currency) {
         Project p = Project.builder()
                 .title(title)
                 .description(description)
                 .clientName(clientName)
+                .clientEmail(clientEmail)
                 .freelancerName(freelancerName)
+                .freelancerEmail(freelancerEmail)
                 .totalBudget(budget)
                 .currency(currency != null ? currency : "USD")
                 .status(Project.ProjectStatus.ACTIVE)
@@ -74,6 +77,9 @@ public class ProjectService {
                                       String dueDate, String deliverables, String criteria,
                                       String description, String contractVersionId) {
         getProject(projectId); // validate exists
+        if (amount == null || amount.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException("Milestone amount must be positive");
+        }
         java.time.LocalDate parsedDueDate = null;
         if (dueDate != null && !dueDate.isBlank()) {
             try {

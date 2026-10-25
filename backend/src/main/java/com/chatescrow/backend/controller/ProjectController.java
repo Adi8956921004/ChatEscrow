@@ -38,11 +38,14 @@ public class ProjectController {
         String title = (String) body.get("title");
         String description = (String) body.get("description");
         String clientName = (String) body.getOrDefault("clientName", "Client");
+        String clientEmail = (String) body.get("clientEmail");
         String freelancerName = (String) body.getOrDefault("freelancerName", "Freelancer");
+        String freelancerEmail = (String) body.get("freelancerEmail");
         BigDecimal budget = body.get("totalBudget") != null
                 ? new BigDecimal(body.get("totalBudget").toString()) : null;
         String currency = (String) body.getOrDefault("currency", "USD");
-        Project p = projectService.createProject(title, description, clientName, freelancerName, budget, currency);
+        Project p = projectService.createProject(title, description, clientName, clientEmail,
+                freelancerName, freelancerEmail, budget, currency);
         return ResponseEntity.ok(p);
     }
 
@@ -92,9 +95,14 @@ public class ProjectController {
         return projectService.getMilestones(projectId);
     }
 
+    /**
+     * Creates a milestone. Only the client role may add milestones to a project.
+     */
     @PostMapping("/projects/{projectId}/milestones")
     public ResponseEntity<Milestone> createMilestone(@PathVariable String projectId,
-                                                      @RequestBody Map<String, Object> body) {
+                                                      @RequestBody Map<String, Object> body,
+                                                      HttpServletRequest request) {
+        securityService.requireClient(request);
         String title = (String) body.get("title");
         BigDecimal amount = body.get("amount") != null
                 ? new BigDecimal(body.get("amount").toString()) : null;
@@ -165,6 +173,8 @@ public class ProjectController {
 
     /**
      * Records a simulated demo payment. Only clients may fund milestones.
+     * The funding amount and currency are strictly retrieved from the stored milestone
+     * to prevent client tampering.
      */
     @PostMapping("/payments/demo-deposit")
     public ResponseEntity<Payment> demoDeposit(@RequestBody Map<String, Object> body,
@@ -172,10 +182,7 @@ public class ProjectController {
         securityService.requireClient(request);
         String projectId = (String) body.get("projectId");
         String milestoneId = (String) body.get("milestoneId");
-        BigDecimal amount = body.get("amount") != null
-                ? new BigDecimal(body.get("amount").toString()) : null;
-        String currency = (String) body.getOrDefault("currency", "USD");
-        return ResponseEntity.ok(paymentService.recordDemoPayment(projectId, milestoneId, amount, currency));
+        return ResponseEntity.ok(paymentService.recordDemoPayment(projectId, milestoneId));
     }
 
     /**
