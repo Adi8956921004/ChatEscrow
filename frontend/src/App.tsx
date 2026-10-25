@@ -6,6 +6,7 @@ import {
   paymentStatusLabel,
   setActorRole,
   getActorRole,
+  getProject,
   getProjects,
   getMilestones,
   createMilestone,
@@ -496,7 +497,7 @@ function Dashboard({ navigate, projectId }: { navigate: (s: Screen) => void; pro
               </div>
             </div>
             {(() => {
-              const activeMilestone = pendingReviewMilestone || milestones.find((m) => m.status !== "RELEASED") || milestones[0]
+              const activeMilestone = pendingReviewMilestone || milestones.find((m) => m.status !== "ACCEPTED") || milestones[0]
               return (
                 <div className="mt-4 grid gap-3 rounded-xl bg-surface p-4 sm:grid-cols-3">
                   <div>
@@ -1638,6 +1639,10 @@ function NotificationsDrawer({
 }
 
 function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projectId: string }) {
+  const [project, setProject] = useState<Project | null>(null)
+  useEffect(() => {
+    getProject(projectId).then(setProject).catch(() => {})
+  }, [projectId])
   const [milestones, setMilestones] = useState<Milestone[]>([])
   const [selectedMilestone, setSelectedMilestone] = useState<Milestone | null>(null)
   const [submissions, setSubmissions] = useState<Submission[]>([])
@@ -1969,7 +1974,7 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
               <div className="p-5 md:p-6 space-y-4">
                 {parsedReport && (
                   <div className="space-y-3">
-                    {parsedReport.overallSummary && (
+                    {Boolean(parsedReport.overallSummary) && (
                       <div className="rounded-xl bg-surface p-4 border border-line">
                         <p className="text-xs font-bold text-muted uppercase tracking-wider mb-1">Executive Summary</p>
                         <p className="text-sm text-ink leading-relaxed">{String(parsedReport.overallSummary)}</p>
@@ -2017,8 +2022,8 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
                             <div>
                               <p className="text-sm font-bold text-ink">{String(finding.criterion)}</p>
                               <p className="mt-2 text-sm leading-relaxed text-muted">{String(finding.evidence ?? "")}</p>
-                              {finding.gap && <p className="mt-1 text-xs text-warning">Gap: {String(finding.gap)}</p>}
-                              {finding.confidence && <p className="mt-1 text-xs text-subtle">Confidence: {String(finding.confidence)}</p>}
+                              {Boolean(finding.gap) && <p className="mt-1 text-xs text-warning">Gap: {String(finding.gap)}</p>}
+                              {Boolean(finding.confidence) && <p className="mt-1 text-xs text-subtle">Confidence: {String(finding.confidence)}</p>}
                             </div>
                           </div>
                           <Badge tone={isMet ? "green" : "amber"}>{status}</Badge>
@@ -2218,7 +2223,7 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
   const handleCreatePaypalOrder = async () => {
     setLoadingPaypal(true); setError(null); setOrderResult(null); setCaptureResult(null)
     try {
-      const result = await createPaypalOrder(projectId, selectedMilestoneId, parseFloat(amount))
+      const result = await createPaypalOrder(projectId, selectedMilestoneId, milestones.find((m) => m.id === selectedMilestoneId)?.currency ?? "USD")
       if (result.orderId) {
         sessionStorage.setItem("chatescrow_pending_order", String(result.orderId))
       }
@@ -2407,7 +2412,7 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
               <div className="rounded-xl border border-line bg-surface p-4 space-y-3">
                 <p className="text-xs font-bold text-ink">Order Created: <span className="font-mono">{String(orderResult.orderId ?? "—")}</span></p>
                 <div className="flex flex-col gap-2">
-                  {orderResult.approveUrl && String(orderResult.approveUrl).startsWith("https") && (
+                  {Boolean(orderResult.approveUrl) && String(orderResult.approveUrl).startsWith("https") && (
                     <a
                       href={String(orderResult.approveUrl)}
                       target="_blank"
@@ -2417,7 +2422,7 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
                       <Icon name="external" size="sm" /> 1. Approve on PayPal Sandbox
                     </a>
                   )}
-                  {orderResult.orderId && (
+                  {Boolean(orderResult.orderId) && (
                     <Button
                       variant="secondary"
                       icon="check"
@@ -2436,7 +2441,7 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
               <div className="rounded-xl border border-success-border bg-success-soft p-3 space-y-1">
                 <p className="text-xs font-bold text-success flex items-center gap-1.5"><Icon name="check" size="sm" /> Captured &amp; Verified</p>
                 <p className="text-xs text-muted font-mono">Order: {String(captureResult.orderId)}</p>
-                {captureResult.captureId && String(captureResult.captureId) && (
+                {Boolean(captureResult.captureId) && (
                   <p className="text-xs text-muted font-mono">Capture ID: {String(captureResult.captureId)}</p>
                 )}
               </div>
@@ -2675,6 +2680,12 @@ export default function App() {
   const [projectId, setProjectId] = useState<string>("demo-project-001")
   const [refreshKey, setRefreshKey] = useState(0)
   const triggerRefresh = () => setRefreshKey((k) => k + 1)
+  const [activeRole, setActiveRole] = useState<Role>(getActorRole())
+  const selectRole = (role: Role) => {
+    setActorRole(role)
+    setActiveRole(role)
+    triggerRefresh()
+  }
 
   useEffect(() => {
     getProjects()
@@ -2690,9 +2701,9 @@ export default function App() {
 
   return (
     <div className="app-shell min-h-screen bg-page text-ink">
-      <Sidebar screen={screen} setScreen={navigate} open={menuOpen} close={() => setMenuOpen(false)} />
+      <Sidebar screen={screen} setScreen={navigate} open={menuOpen} close={() => setMenuOpen(false)} activeRole={activeRole} />
       <div className="lg:pl-72">
-        <Topbar screen={screen} openMenu={() => setMenuOpen(true)} />
+        <Topbar screen={screen} openMenu={() => setMenuOpen(true)} activeRole={activeRole} onSelectRole={selectRole} />
         <main className="relative p-4 md:p-8 lg:p-10">
           {screen === "dashboard" && <Dashboard navigate={navigate} projectId={projectId} />}
           {screen === "builder" && <Builder navigate={navigate} projectId={projectId} onRefresh={triggerRefresh} />}
