@@ -23,6 +23,9 @@ Freelancers and clients often agree on work through informal messaging apps. Cru
 > [!IMPORTANT]
 > **Prototype Financial Boundary:** This hackathon prototype does **not** provide legally regulated escrow services. Standard PayPal Checkout does not automatically freeze or escrow funds until milestone approval. ChatEscrow provides a **milestone payment protection workflow prototype**. Funds captures are verified through PayPal REST APIs, while milestones and internal release statuses are managed transparently within the ledger.
 
+> [!NOTE]
+> **Demo Roles, Not Authentication:** Role-based access control in this prototype is handled via static demo Bearer tokens (`client-demo-token` and `freelancer-demo-token`). These tokens facilitate UI role switching between Client (Sarah Miller) and Freelancer (Alex Carter) personas for demonstration purposes; they represent **demo roles, not authentication**.
+
 ---
 
 ## 3. Architecture & Tech Stack
@@ -46,7 +49,7 @@ Freelancers and clients often agree on work through informal messaging apps. Cru
 
 - **Frontend:** React 19, TypeScript, Vite, Tailwind CSS tokens
 - **Backend:** Spring Boot 3.2.5, Java 17, Spring Data JPA, WebFlux WebClient, H2 Database, Lombok
-- **AI Integration:** Google Gemini (`gemini-2.0-flash`) via Generative Language API, with graceful deterministic demo fallback when no API key is set
+- **AI Integration:** Google Gemini (defaults to `gemini-2.0-flash`, with runtime fallback to `gemini-1.5-flash` if unavailable; configurable via the `AI_MODEL` environment variable). In absence of an `AI_API_KEY`, a built-in deterministic demo extractor and evaluator runs offline.
 - **Payment Integration:** PayPal Sandbox REST API (`/v1/oauth2/token`, `/v2/checkout/orders`, `/v2/checkout/orders/{id}/capture`)
 
 ---
@@ -74,7 +77,11 @@ cd frontend
 npm install
 npm run dev
 ```
-Open `http://localhost:8443` (or `http://localhost:5173`) in your browser.
+Open `http://localhost:5173` in your browser.
+
+> **Port Configuration:** The standard local Vite development server listens on port **5173** (`http://localhost:5173`). In containerized or Figma Make environments with `$PORT` defined, Vite listens on `$PORT` (typically **8443**). The backend CORS policy permits both `http://localhost:5173` and `http://localhost:8443`.
+
+> **H2 Console** (optional): By default the H2 console is **disabled**. To enable it for a session, set the environment variable `H2_CONSOLE_ENABLED=true` before starting the backend, then open `http://localhost:8080/h2-console` (JDBC URL: `jdbc:h2:mem:chatescrow`, User: `sa`, Password: empty).
 
 ---
 
