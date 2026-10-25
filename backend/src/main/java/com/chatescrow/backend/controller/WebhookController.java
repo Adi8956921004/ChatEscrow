@@ -67,32 +67,15 @@ public class WebhookController {
             eventId = payloadNode.path("id").asText(null);
         } catch (Exception ignored) {}
 
-        // Step 3: Deduplicate on event ID
+        // Step 3: Deduplicate on event ID and claim first via database constraint
         String stableId = eventId != null ? eventId : (transmissionId != null ? transmissionId : "evt-" + Instant.now().toEpochMilli());
         if (webhookRepo.findByProviderEventId(stableId).isPresent()) {
             log.warn("Duplicate webhook event ignored (eventId={})", stableId);
             return ResponseEntity.ok(Map.of("status", "duplicate_ignored"));
         }
 
-        // Step 4: Handle payment state updates for VERIFIED events
-        String processingResult = "STORED_UNVERIFIED";
-        if (status == WebhookEvent.VerificationStatus.VERIFIED) {
-            processingResult = "PROCESSED_VERIFIED";
-            log.info("Webhook event verified successfully: type={}, eventId={}", eventType, stableId);
-
-            if (payloadNode != null) {
-                try {
-                    handlePaymentWebhookEvent(eventType, payloadNode);
-                } catch (Exception ex) {
-                    log.error("Failed to update payment state for webhook {}: {}", stableId, ex.getMessage());
-                }
-            }
-        } else if (status == WebhookEvent.VerificationStatus.FAILED) {
-            log.warn("Webhook signature verification FAILED: type={}, transmissionId={} — stored for audit only", eventType, transmissionId);
-            processingResult = "STORED_VERIFICATION_FAILED";
-        } else {
-            log.info("Webhook stored without verification (PayPal not configured): type={}, eventId={}", eventType, stableId);
-        }
+        String processingResult = status == WebhookEvent.VerificationStatus.VERIFIED ? "PROCESSED_VERIFIED"
+                : (status == WebhookEvent.VerificationStatus.FAILED ? "STORED_VERIFICATION_FAILED" : "STORED_UNVERIFIED");
 
         WebhookEvent event = WebhookEvent.builder()
                 .providerEventId(stableId)
@@ -105,10 +88,27 @@ public class WebhookController {
                 .build();
 
         try {
-            webhookRepo.save(event);
+            event = webhookRepo.saveAndFlush(event);
         } catch (DataIntegrityViolationException ex) {
             log.warn("Concurrent duplicate webhook caught by unique constraint: {}", stableId);
             return ResponseEntity.ok(Map.of("status", "duplicate_ignored"));
+        }
+
+        // Step 4: Handle payment state updates for VERIFIED events
+        if (status == WebhookEvent.VerificationStatus.VERIFIED) {
+            log.info("Webhook event verified successfully: type={}, eventId={}", eventType, stableId);
+
+            if (payloadNode != null) {
+                try {
+                    handlePaymentWebhookEvent(eventType, payloadNode);
+                } catch (Exception ex) {
+                    log.error("Failed to update payment state for webhook {}: {}", stableId, ex.getMessage());
+                }
+            }
+        } else if (status == WebhookEvent.VerificationStatus.FAILED) {
+            log.warn("Webhook signature verification FAILED: type={}, transmissionId={} — stored for audit only", eventType, transmissionId);
+        } else {
+            log.info("Webhook stored without verification (PayPal not configured): type={}, eventId={}", eventType, stableId);
         }
 
         return ResponseEntity.ok(Map.of(

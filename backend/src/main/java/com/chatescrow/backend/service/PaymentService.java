@@ -88,7 +88,7 @@ public class PaymentService {
                 "status", "APPROVAL_PENDING",
                 "amount", amount,
                 "currency", effectiveCurrency,
-                "sandbox", true
+                "sandbox", paypalService.isSandbox()
             );
         } catch (Exception e) {
             payment.setStatus(Payment.PaymentStatus.FAILED);
@@ -263,7 +263,7 @@ public class PaymentService {
                         "status", "UNKNOWN",
                         "providerStatus", result.status(),
                         "mismatch", true,
-                        "sandbox", true
+                        "sandbox", paypalService.isSandbox()
                 );
             }
 
@@ -288,7 +288,7 @@ public class PaymentService {
                     "captureId", result.captureId() != null ? result.captureId() : "",
                     "status", "CAPTURED",
                     "providerStatus", result.status(),
-                    "sandbox", true
+                    "sandbox", paypalService.isSandbox()
             );
         } else {
             // PayPal returned a non-COMPLETED status — treat as FAILED.
@@ -303,7 +303,7 @@ public class PaymentService {
                     "captureId", result.captureId() != null ? result.captureId() : "",
                     "status", "FAILED",
                     "providerStatus", result.status(),
-                    "sandbox", true
+                    "sandbox", paypalService.isSandbox()
             );
         }
     }
@@ -419,5 +419,9 @@ public class PaymentService {
 
     public boolean isPaypalConfigured() {
         return paypalService.isConfigured();
+    }
+
+    public boolean isSandbox() {
+        return paypalService.isSandbox();
     }
 }

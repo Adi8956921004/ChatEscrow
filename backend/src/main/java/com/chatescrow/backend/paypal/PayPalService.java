@@ -58,6 +58,10 @@ public class PayPalService {
                 && clientSecret != null && !clientSecret.isBlank() && !clientSecret.equals("CONFIGURE_ME");
     }
 
+    public boolean isSandbox() {
+        return baseUrl != null && baseUrl.contains("sandbox");
+    }
+
     /**
      * Obtains a cached or fresh OAuth 2.0 access token from PayPal.
      */
@@ -119,6 +123,13 @@ public class PayPalService {
         appContext.put("cancel_url", safeBase + "/payment/cancel");
         body.set("application_context", appContext);
 
+        // Modern PayPal v2 Orders API payment_source experience_context format
+        ObjectNode paymentSource = objectMapper.createObjectNode();
+        ObjectNode paypalSource = objectMapper.createObjectNode();
+        paypalSource.set("experience_context", appContext.deepCopy());
+        paymentSource.set("paypal", paypalSource);
+        body.set("payment_source", paymentSource);
+
         String requestId = "order-req-" + UUID.randomUUID();
 
         try {
@@ -172,30 +183,7 @@ public class PayPalService {
                     .block();
 
             JsonNode result = objectMapper.readTree(response);
-            String status = result.path("status").asText("UNKNOWN");
-            String captureId = null;
-            BigDecimal capturedAmount = null;
-            String capturedCurrency = null;
-
-            if (result.has("purchase_units")) {
-                JsonNode pu = result.get("purchase_units").get(0);
-                if (pu.has("payments") && pu.get("payments").has("captures")) {
-                    JsonNode capture = pu.get("payments").get("captures").get(0);
-                    captureId = capture.path("id").asText(null);
-                    if (capture.has("amount")) {
-                        JsonNode amtNode = capture.get("amount");
-                        if (amtNode.has("value")) {
-                            try {
-                                capturedAmount = new BigDecimal(amtNode.get("value").asText());
-                            } catch (Exception ignored) {}
-                        }
-                        if (amtNode.has("currency_code")) {
-                            capturedCurrency = amtNode.get("currency_code").asText(null);
-                        }
-                    }
-                }
-            }
-            return new PayPalCaptureResult(orderId, captureId, status, capturedAmount, capturedCurrency);
+            return parseCaptureResult(orderId, result);
         } catch (WebClientResponseException e) {
             // Definitive HTTP error from PayPal (4xx/5xx) — payment can be marked FAILED.
             String errBody = e.getResponseBodyAsString();
@@ -229,36 +217,42 @@ public class PayPalService {
                     .block();
 
             JsonNode result = objectMapper.readTree(response);
-            String status = result.path("status").asText("UNKNOWN");
-            String captureId = null;
-            BigDecimal capturedAmount = null;
-            String capturedCurrency = null;
-
-            if (result.has("purchase_units")) {
-                JsonNode pu = result.get("purchase_units").get(0);
-                if (pu.has("payments") && pu.get("payments").has("captures")) {
-                    JsonNode capture = pu.get("payments").get("captures").get(0);
-                    captureId = capture.path("id").asText(null);
-                    if (capture.has("amount")) {
-                        JsonNode amtNode = capture.get("amount");
-                        if (amtNode.has("value")) {
-                            try { capturedAmount = new BigDecimal(amtNode.get("value").asText()); } catch (Exception ignored) {}
-                        }
-                        if (amtNode.has("currency_code")) {
-                            capturedCurrency = amtNode.get("currency_code").asText(null);
-                        }
-                    }
-                }
-            }
-            return new PayPalCaptureResult(orderId, captureId, status, capturedAmount, capturedCurrency);
+            return parseCaptureResult(orderId, result);
         } catch (WebClientResponseException e) {
             String errBody = e.getResponseBodyAsString();
             log.error("PayPal recheckOrder HTTP {} for orderId={}: {}", e.getStatusCode().value(), orderId, errBody);
             throw new com.chatescrow.backend.exception.PayPalApiException(e.getStatusCode().value(), errBody, e);
         } catch (Exception e) {
             log.error("PayPal recheckOrder network error for orderId={}: {}", orderId, e.getMessage(), e);
-            throw new RuntimeException("Failed to re-check PayPal order: " + e.getMessage(), e);
+            throw new PayPalCaptureTimeoutException(orderId, e);
         }
+    }
+
+    private PayPalCaptureResult parseCaptureResult(String orderId, JsonNode result) {
+        String status = result.path("status").asText("UNKNOWN");
+        String captureId = null;
+        BigDecimal capturedAmount = null;
+        String capturedCurrency = null;
+
+        if (result.has("purchase_units")) {
+            JsonNode pu = result.get("purchase_units").get(0);
+            if (pu.has("payments") && pu.get("payments").has("captures")) {
+                JsonNode capture = pu.get("payments").get("captures").get(0);
+                captureId = capture.path("id").asText(null);
+                if (capture.has("amount")) {
+                    JsonNode amtNode = capture.get("amount");
+                    if (amtNode.has("value")) {
+                        try {
+                            capturedAmount = new BigDecimal(amtNode.get("value").asText());
+                        } catch (Exception ignored) {}
+                    }
+                    if (amtNode.has("currency_code")) {
+                        capturedCurrency = amtNode.get("currency_code").asText(null);
+                    }
+                }
+            }
+        }
+        return new PayPalCaptureResult(orderId, captureId, status, capturedAmount, capturedCurrency);
     }
 
     /**

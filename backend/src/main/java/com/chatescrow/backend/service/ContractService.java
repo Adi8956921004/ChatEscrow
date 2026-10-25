@@ -73,8 +73,40 @@ public class ContractService {
      */
     @Transactional
     public ContractVersion saveDraft(String projectId, String termsJson) {
+        return saveDraft(projectId, null, termsJson);
+    }
+
+    /**
+     * Saves an edited contract draft. If draftId is provided and exists for this project, updates it.
+     */
+    @Transactional
+    public ContractVersion saveDraft(String projectId, String draftId, String termsJson) {
         String resolvedId = projectService.resolveProjectId(projectId);
         projectService.getProject(resolvedId);
+
+        if (draftId != null && !draftId.isBlank()) {
+            java.util.Optional<ContractVersion> existingOpt = contractRepo.findById(draftId);
+            if (existingOpt.isPresent()) {
+                ContractVersion existing = existingOpt.get();
+                if (existing.getProjectId().equals(resolvedId)) {
+                    existing.setTermsJson(termsJson);
+                    existing.setClientApprovalStatus(ContractVersion.ApprovalStatus.PENDING);
+                    existing.setFreelancerApprovalStatus(ContractVersion.ApprovalStatus.PENDING);
+                    existing.setClientApprovedAt(null);
+                    existing.setFreelancerApprovedAt(null);
+                    existing = contractRepo.save(existing);
+
+                    ObjectNode meta = objectMapper.createObjectNode();
+                    meta.put("version", existing.getVersionNumber());
+                    meta.put("draftId", existing.getId());
+                    projectService.audit(resolvedId, "user", "User",
+                            "CONTRACT_DRAFT_SAVED", "ContractVersion", existing.getId(),
+                            meta.toString());
+                    return existing;
+                }
+            }
+        }
+
         int nextVersion = contractRepo.findByProjectIdOrderByVersionNumberDesc(resolvedId).size() + 1;
         ContractVersion cv = ContractVersion.builder()
                 .projectId(resolvedId)

@@ -570,5 +570,66 @@ class ChatEscrowApplicationTests {
         assertEquals(Payment.PaymentStatus.CAPTURED, stored.getStatus());
         assertEquals("CAP-SUCCESS-999", stored.getProviderCaptureId());
     }
+
+    @Test
+    @DisplayName("Capture retry on ORDER_ALREADY_CAPTURED rechecks order and recovers CAPTURED state")
+    void captureRetryOnOrderAlreadyCapturedRecovers() throws Exception {
+        Project project = projectService.createProject("Capture Retry", "Desc", "Client", null, "Freelancer", null, new BigDecimal("350"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "M-Retry", new BigDecimal("350"), "2025-10-30", "D", "AC", "Desc", null);
+
+        Payment payment = Payment.builder()
+                .projectId(project.getId())
+                .milestoneId(m.getId())
+                .amount(new BigDecimal("350"))
+                .currency("USD")
+                .provider("PAYPAL")
+                .providerOrderId("ORD-RETRY-ALREADY-CAPTURED")
+                .status(Payment.PaymentStatus.APPROVAL_PENDING)
+                .build();
+        paymentRepository.save(payment);
+
+        String errJson = "{\"name\":\"UNPROCESSABLE_ENTITY\",\"details\":[{\"issue\":\"ORDER_ALREADY_CAPTURED\",\"description\":\"The order has already been captured.\"}]}";
+        when(paypalService.captureOrder("ORD-RETRY-ALREADY-CAPTURED"))
+                .thenThrow(new PayPalApiException(422, errJson));
+        when(paypalService.recheckOrder("ORD-RETRY-ALREADY-CAPTURED"))
+                .thenReturn(new PayPalService.PayPalCaptureResult("ORD-RETRY-ALREADY-CAPTURED", "CAP-RECOVERED-777", "COMPLETED", new BigDecimal("350.00"), "USD"));
+
+        mockMvc.perform(post("/api/payments/paypal/orders/ORD-RETRY-ALREADY-CAPTURED/capture"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("CAPTURED"))
+                .andExpect(jsonPath("$.captureId").value("CAP-RECOVERED-777"));
+
+        Payment stored = paymentRepository.findByProviderOrderId("ORD-RETRY-ALREADY-CAPTURED").orElseThrow();
+        assertEquals(Payment.PaymentStatus.CAPTURED, stored.getStatus());
+        assertEquals("CAP-RECOVERED-777", stored.getProviderCaptureId());
+    }
+
+    @Test
+    @DisplayName("Requesting revision on non-SUBMITTED milestone fails with 409 CONFLICT")
+    void requestRevisionOnNonSubmittedFails() throws Exception {
+        Project project = projectService.createProject("Revision Guard", "Desc", "Client", null, "Freelancer", null, new BigDecimal("100"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "M-RevisionGuard", new BigDecimal("100"), "2025-10-30", "D", "AC", "Desc", null);
+
+        mockMvc.perform(post("/api/milestones/" + m.getId() + "/request-revision")
+                        .header("Authorization", "Bearer client-demo-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"note\":\"Need rework\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409));
+    }
+
+    @Test
+    @DisplayName("Draft generation and evaluation endpoints require participant authorization")
+    void aiEndpointsRequireAuthorization() throws Exception {
+        Project project = projectService.createProject("Sec Guard", "Desc", "Client", null, "Freelancer", null, new BigDecimal("100"), "USD");
+
+        mockMvc.perform(post("/api/projects/" + project.getId() + "/contract-drafts")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"conversationText\":\"Agreed on $100 delivery\"}"))
+                .andExpect(status().isForbidden());
+
+        mockMvc.perform(post("/api/submissions/sub-fake-123/evaluate"))
+                .andExpect(status().isForbidden());
+    }
 }
 
