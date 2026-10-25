@@ -24,6 +24,7 @@ import {
   createPaypalOrder,
   capturePaypalOrder,
   recheckPaypalOrder,
+  depositDemoPayment,
   depositDemoEscrow,
   getProjectPayments,
   refundPayment,
@@ -208,7 +209,7 @@ const navItems: { id: Screen; label: string; icon: IconName }[] = [
   { id: "builder", label: "AI Agreement Builder", icon: "spark" },
   { id: "agreement", label: "Agreements", icon: "file" },
   { id: "review", label: "AI Work Review", icon: "search" },
-  { id: "payment", label: "Escrow & Checkout", icon: "wallet" },
+  { id: "payment", label: "Milestone Funding & Checkout", icon: "wallet" },
   { id: "timeline", label: "Activity Timeline", icon: "clock" },
   { id: "webhooks", label: "Webhook Inspector", icon: "bell" },
 ]
@@ -483,7 +484,7 @@ function Dashboard({ navigate, projectId }: { navigate: (s: Screen) => void; pro
               </div>
               <div className="sm:text-right">
                 <p className="font-extrabold text-ink">{formatMoney(totalBudget)}</p>
-                <p className="text-xs text-muted">Escrow target</p>
+                <p className="text-xs text-muted">Milestone funding target</p>
               </div>
             </div>
             <div className="mt-4">
@@ -503,7 +504,7 @@ function Dashboard({ navigate, projectId }: { navigate: (s: Screen) => void; pro
                     <p className="mt-1 text-sm font-bold text-ink">{activeMilestone?.title ?? "Milestone Funding"}</p>
                   </div>
                   <div>
-                    <p className="text-xs text-muted">Escrow Amount</p>
+                    <p className="text-xs text-muted">Milestone Amount</p>
                     <p className="mt-1 text-sm font-bold text-ink">{activeMilestone ? formatMoney(activeMilestone.amount) : "—"}</p>
                   </div>
                   <div>
@@ -1048,7 +1049,7 @@ function Builder({ navigate, projectId, onRefresh }: { navigate: (s: Screen) => 
             </div>
 
             {savingMilestones && (
-              <p className="mt-3 text-xs text-center text-primary animate-pulse font-medium">Syncing agreed milestones with escrow backend...</p>
+              <p className="mt-3 text-xs text-center text-primary animate-pulse font-medium">Syncing agreed milestones with milestone funding backend...</p>
             )}
 
             {clientApproved && freelancerApproved && (
@@ -1436,7 +1437,7 @@ MUTUAL PROTECTION PROTOCOL:
 - Funds release ONLY upon verified AI Acceptance Gate evaluation AND explicit Client Authorization.
 - Neither party may unilaterally drain funds without agreed dispute resolution.
 
-Authority: ChatEscrow Protocol v1.0 (Audit Trail Record)
+Audit Record Fingerprint: ${digest} (Cryptographic verification hash)
 ========================================================================`
     const blob = new Blob([text], { type: "text/plain" })
     const url = URL.createObjectURL(blob)
@@ -1545,14 +1546,14 @@ function RefundModal({
         <div className="flex items-center justify-between border-b border-line pb-4">
           <div className="flex items-center gap-2 text-danger">
             <Icon name="warning" size="md" />
-            <Heading level={2}>Refund Escrow Deposit</Heading>
+            <Heading level={2}>Refund Milestone Deposit</Heading>
           </div>
           <button onClick={onClose} className="rounded-lg p-2 text-muted hover:bg-surface"><Icon name="x" size="sm" /></button>
         </div>
 
         <div className="mt-4 space-y-3">
           <InfoBanner tone="amber">
-            You are initiating a full refund of <strong>{formatMoney(payment.amount)} {payment.currency}</strong> from escrow back to Sarah Miller (Client).
+            You are initiating a full refund of <strong>{formatMoney(payment.amount)} {payment.currency}</strong> from milestone funding back to Sarah Miller (Client).
           </InfoBanner>
           <Field label="Refund Reason / Notes">
             <input
@@ -1568,7 +1569,7 @@ function RefundModal({
         <div className="mt-5 flex justify-end gap-3 border-t border-line pt-4">
           <Button variant="ghost" onClick={onClose}>Cancel</Button>
           <Button variant="danger" loading={refunding} onClick={handleRefund}>
-            Confirm Escrow Refund
+            Confirm Milestone Refund
           </Button>
         </div>
       </div>
@@ -1586,7 +1587,7 @@ function NotificationsDrawer({
   navigate: (s: Screen) => void
 }) {
   const [notifs, setNotifs] = useState([
-    { id: "1", title: "Escrow Deposit Locked", detail: "$400.00 USD secured in escrow for Frontend Development", time: "5 min ago", screen: "payment" as Screen, icon: "wallet" as IconName, tone: "green" as const },
+    { id: "1", title: "Milestone Funded", detail: "$400.00 USD secured for Frontend Development", time: "5 min ago", screen: "payment" as Screen, icon: "wallet" as IconName, tone: "green" as const },
     { id: "2", title: "Milestone Deliverables Submitted", detail: "Alex Carter submitted storefront GitHub link & preview URL", time: "18 min ago", screen: "review" as Screen, icon: "upload" as IconName, tone: "blue" as const },
     { id: "3", title: "AI Acceptance Gate Completed", detail: "94% criteria passed. Advisory report ready for review.", time: "22 min ago", screen: "review" as Screen, icon: "spark" as IconName, tone: "purple" as const },
     { id: "4", title: "Contract Agreement Signed", detail: "Mutual digital approval recorded for Contract Version 1", time: "2 hours ago", screen: "agreement" as Screen, icon: "file" as IconName, tone: "gray" as const },
@@ -1652,7 +1653,6 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
   const [error, setError] = useState<string | null>(null)
   const [releasing, setReleasing] = useState(false)
   const [releaseResult, setReleaseResult] = useState<Record<string, unknown> | null>(null)
-  const [recipientEmail, setRecipientEmail] = useState("alex.carter@example.com")
   const [disputePackOpen, setDisputePackOpen] = useState(false)
   const [disputePack, setDisputePack] = useState<Record<string, unknown> | null>(null)
   const [loadingDisputePack, setLoadingDisputePack] = useState(false)
@@ -1771,7 +1771,7 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
     if (!selectedMilestone) return
     setReleasing(true); setError(null); setReleaseResult(null)
     try {
-      const res = await releaseMilestone(selectedMilestone.id, recipientEmail)
+      const res = await releaseMilestone(selectedMilestone.id)
       setReleaseResult(res)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Payout release failed. Check backend connectivity and PayPal credentials.")
@@ -2072,14 +2072,15 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
               </div>
 
               <div className="space-y-3">
-                <Field label="Recipient Freelancer Email">
-                  <input
-                    type="email"
-                    value={recipientEmail}
-                    onChange={(e) => setRecipientEmail(e.target.value)}
-                    className="field text-xs"
-                  />
-                </Field>
+                <div className="rounded-xl border border-line bg-surface p-3 text-xs">
+                  <span className="block font-bold text-subtle uppercase">Target Recipient</span>
+                  <p className="mt-1 font-mono text-ink font-semibold">
+                    {project?.freelancerEmail || "alex.carter@example.com"}
+                  </p>
+                  <p className="mt-0.5 text-[0.7rem] text-muted">
+                    Locked to verified project freelancer record. Recipient cannot be overridden at release.
+                  </p>
+                </div>
                 <Button icon="wallet" loading={releasing} onClick={handleRelease}>
                   Authorize Payout Release ({formatMoney(selectedMilestone.amount)})
                 </Button>
@@ -2139,7 +2140,7 @@ function Review({ navigate, projectId }: { navigate: (s: Screen) => void; projec
   )
 }
 
-// ── Escrow & Checkout Screen ──────────────────────────────────────────────
+// ── Milestone Funding & Checkout Screen ─────────────────────────────────────
 
 function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void; projectId: string }) {
   const [payments, setPayments] = useState<Payment[]>([])
@@ -2202,7 +2203,7 @@ function PaymentScreen({ navigate, projectId }: { navigate: (s: Screen) => void;
       return
     }
     try {
-      const p = await depositDemoEscrow(projectId, selectedMilestoneId, parsedAmount)
+      const p = await depositDemoPayment(projectId, selectedMilestoneId)
       setPayments((prev) => [p, ...prev])
       setDemoDepositSuccess(`Successfully recorded ${formatMoney(parsedAmount)} for milestone funding via demo simulation.`)
       reloadData()
@@ -2611,7 +2612,7 @@ function Timeline({ projectId }: { projectId: string }) {
         <div>
           <Badge tone="gray"><Icon name="clock" size="sm" /> Verifiable Audit</Badge>
           <Heading className="mt-3">Activity Timeline</Heading>
-          <p className="mt-2 text-sm text-muted">Immutable record of all project agreements, escrow deposits, submissions, and acceptance decisions.</p>
+          <p className="mt-2 text-sm text-muted">Immutable record of all project agreements, milestone funding deposits, submissions, and acceptance decisions.</p>
         </div>
         <Button variant="secondary" icon="refresh" onClick={load}>Refresh</Button>
       </div>

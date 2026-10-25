@@ -228,10 +228,10 @@ export const flagDisagreement = (milestoneId: string, reason: string) =>
     method: "POST",
     body: JSON.stringify({ reason }),
   })
-export const releaseMilestone = (milestoneId: string, recipientEmail?: string) =>
+export const releaseMilestone = (milestoneId: string) =>
   api<Record<string, unknown>>(`/api/milestones/${milestoneId}/release`, {
     method: "POST",
-    body: JSON.stringify({ recipientEmail }),
+    body: "{}",
   })
 export const getDisputePack = (milestoneId: string) =>
   api<Record<string, unknown>>(`/api/milestones/${milestoneId}/dispute-pack`)
@@ -247,11 +247,12 @@ export const capturePaypalOrder = (orderId: string) =>
   api<Record<string, unknown>>(`/api/payments/paypal/orders/${orderId}/capture`, { method: "POST", body: "{}" })
 export const recheckPaypalOrder = (orderId: string) =>
   api<Record<string, unknown>>(`/api/payments/paypal/orders/${orderId}/recheck`, { method: "POST", body: "{}" })
-export const depositDemoEscrow = (projectId: string, milestoneId: string, amount?: number, currency = "USD") =>
+export const depositDemoPayment = (projectId: string, milestoneId: string) =>
   api<Payment>("/api/payments/demo-deposit", {
     method: "POST",
-    body: JSON.stringify({ projectId, milestoneId, amount, currency }),
+    body: JSON.stringify({ projectId, milestoneId }),
   })
+export const depositDemoEscrow = depositDemoPayment
 export const getProjectPayments = (projectId: string) =>
   api<Payment[]>(`/api/projects/${projectId}/payments`)
 export const refundPayment = (paymentId: string, reason?: string) =>
