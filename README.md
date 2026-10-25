@@ -79,7 +79,7 @@ npm run dev
 ```
 Open `http://localhost:5173` in your browser.
 
-> **Port Configuration:** The standard local Vite development server listens on port **5173** (`http://localhost:5173`). In containerized or Figma Make environments with `$PORT` defined, Vite listens on `$PORT` (typically **8443**). The backend CORS policy permits both `http://localhost:5173` and `http://localhost:8443`.
+> **Port Configuration:** The standard local Vite development server listens on port **5173** (`http://localhost:5173`). If `$PORT` is set, Vite listens on that port instead (for example **8443** in a container). The backend CORS policy permits both `http://localhost:5173` and `http://localhost:8443`.
 
 > **H2 Console** (optional): By default the H2 console is **disabled**. To enable it for a session, set the environment variable `H2_CONSOLE_ENABLED=true` before starting the backend, then open `http://localhost:8080/h2-console` (JDBC URL: `jdbc:h2:mem:chatescrow`, User: `sa`, Password: empty).
 

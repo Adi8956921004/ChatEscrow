@@ -135,6 +135,9 @@ public class MilestoneService {
     @Transactional
     public Milestone requestRevision(String milestoneId, String actorId, String note) {
         Milestone m = getMilestone(milestoneId);
+        if (m.getStatus() != Milestone.MilestoneStatus.SUBMITTED) {
+            throw new IllegalStateException("A revision can only be requested on a SUBMITTED milestone. Current: " + m.getStatus());
+        }
         m.setStatus(Milestone.MilestoneStatus.REVISION_REQUESTED);
         m.setUpdatedAt(Instant.now());
         m = milestoneRepo.save(m);
@@ -149,6 +152,9 @@ public class MilestoneService {
     @Transactional
     public Milestone flagDisagreement(String milestoneId, String actorId, String reason) {
         Milestone m = getMilestone(milestoneId);
+        if (payoutRepo.findByMilestoneId(milestoneId).isPresent()) {
+            throw new IllegalStateException("This milestone has already been released and can no longer be disputed here.");
+        }
         m.setStatus(Milestone.MilestoneStatus.DISAGREEMENT_FLAGGED);
         m.setUpdatedAt(Instant.now());
         m = milestoneRepo.save(m);
@@ -227,7 +233,12 @@ public class MilestoneService {
         // Always use the stored freelancer email — never trust a recipient supplied in the request body.
         // The recipientEmail parameter is intentionally ignored here.
         String storedFreelancerEmail = project.getFreelancerEmail();
-        String effectiveRecipient = (storedFreelancerEmail != null && !storedFreelancerEmail.isBlank())
+        boolean hasEmail = storedFreelancerEmail != null && !storedFreelancerEmail.isBlank();
+        if (!hasEmail && !isDemoEscrow && paypalService.isConfigured()) {
+            // Never invent a recipient address when real money may move.
+            throw new IllegalStateException("Cannot release: the project has no freelancer email on record.");
+        }
+        String effectiveRecipient = hasEmail
                 ? storedFreelancerEmail
                 : project.getFreelancerName().toLowerCase().replace(" ", "") + "@example.com";
 

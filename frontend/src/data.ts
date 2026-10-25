@@ -41,6 +41,7 @@ export interface Project {
   description?: string
   clientName: string
   freelancerName: string
+  freelancerEmail?: string
   currency: string
   status: "ACTIVE" | "COMPLETED" | "CANCELLED"
   totalBudget?: number
