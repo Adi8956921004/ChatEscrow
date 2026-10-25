@@ -5,13 +5,16 @@ import com.chatescrow.backend.model.WebhookEvent;
 import com.chatescrow.backend.repository.PaymentRepository;
 import com.chatescrow.backend.repository.WebhookEventRepository;
 import com.chatescrow.backend.paypal.PayPalService;
+import com.chatescrow.backend.security.SecurityService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -32,6 +35,7 @@ public class WebhookController {
     private final WebhookEventRepository webhookRepo;
     private final PayPalService paypalService;
     private final PaymentRepository paymentRepo;
+    private final SecurityService securityService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @PostMapping("/paypal")
@@ -130,15 +134,39 @@ public class WebhookController {
         if (targetPayment.isPresent()) {
             Payment payment = targetPayment.get();
             if ("PAYMENT.CAPTURE.COMPLETED".equalsIgnoreCase(eventType)) {
+                if (payment.getStatus() == Payment.PaymentStatus.CAPTURED) {
+                    return; // already settled
+                }
+                // Apply the same amount/currency check as the capture flow, so a webhook
+                // cannot promote a payment that was parked as a mismatch.
+                BigDecimal paid = parseAmount(resource.path("amount").path("value").asText(null));
+                String paidCurrency = resource.path("amount").path("currency_code").asText(null);
+                boolean amountOk = paid != null && payment.getAmount() != null
+                        && payment.getAmount().compareTo(paid) == 0;
+                boolean currencyOk = paidCurrency == null
+                        || (payment.getCurrency() != null && payment.getCurrency().equalsIgnoreCase(paidCurrency));
+                if (!amountOk || !currencyOk) {
+                    log.warn("Webhook {} for payment {} has unexpected amount/currency ({} {}) — leaving status {}",
+                            eventType, payment.getId(), paid, paidCurrency, payment.getStatus());
+                    return;
+                }
                 payment.setStatus(Payment.PaymentStatus.CAPTURED);
                 if (captureId != null) {
                     payment.setProviderCaptureId(captureId);
+                }
+                payment.setCapturedAmount(paid);
+                if (paidCurrency != null) {
+                    payment.setCapturedCurrency(paidCurrency);
                 }
                 payment.setVerifiedAt(Instant.now());
                 payment.setUpdatedAt(Instant.now());
                 paymentRepo.save(payment);
                 log.info("Payment {} updated to CAPTURED via webhook event {}", payment.getId(), eventType);
             } else if ("PAYMENT.CAPTURE.DENIED".equalsIgnoreCase(eventType)) {
+                if (payment.getStatus() == Payment.PaymentStatus.CAPTURED) {
+                    log.warn("Ignoring {} for already captured payment {}", eventType, payment.getId());
+                    return;
+                }
                 payment.setStatus(Payment.PaymentStatus.FAILED);
                 payment.setUpdatedAt(Instant.now());
                 paymentRepo.save(payment);
@@ -147,13 +175,27 @@ public class WebhookController {
         }
     }
 
+    private static BigDecimal parseAmount(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        try {
+            return new BigDecimal(value);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     @GetMapping("/events")
-    public List<WebhookEvent> listEvents() {
+    public List<WebhookEvent> listEvents(HttpServletRequest request) {
+        securityService.requireClient(request);
         return webhookRepo.findAll();
     }
 
     @PostMapping("/simulate")
-    public ResponseEntity<WebhookEvent> simulateWebhook(@RequestBody Map<String, String> body) {
+    public ResponseEntity<WebhookEvent> simulateWebhook(@RequestBody Map<String, String> body,
+                                                        HttpServletRequest request) {
+        securityService.requireClient(request);
         String eventType = body.getOrDefault("eventType", "PAYMENT.CAPTURE.COMPLETED");
         String customId = "sim-evt-" + Instant.now().toEpochMilli();
 

@@ -2,12 +2,23 @@ package com.chatescrow.backend.security;
 
 import com.chatescrow.backend.exception.ForbiddenException;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 
 @Component
 public class SecurityService {
 
     public record CurrentActor(String actorId, String role) {}
+
+    // Demo bearer tokens. Override with APP_CLIENT_TOKEN / APP_FREELANCER_TOKEN for anything shared.
+    @Value("${app.auth.client-token:client-demo-token}")
+    private String clientToken;
+
+    @Value("${app.auth.freelancer-token:freelancer-demo-token}")
+    private String freelancerToken;
 
     public CurrentActor resolveActor(HttpServletRequest request) {
         String authHeader = request.getHeader("Authorization");
@@ -16,20 +27,19 @@ public class SecurityService {
         String role = null;
         String actorId = null;
 
-        // Role is determined solely from the Bearer token — not from X-Actor-Role.
-        // X-Actor-Role is accepted by CORS for frontend convenience but is not trusted for authorization.
+        // The role comes only from the bearer token. X-Actor-Role is never trusted.
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring(7).trim();
-            if ("client-demo-token".equalsIgnoreCase(token)) {
+            if (tokenMatches(token, clientToken)) {
                 role = "client";
                 actorId = "client";
-            } else if ("freelancer-demo-token".equalsIgnoreCase(token)) {
+            } else if (tokenMatches(token, freelancerToken)) {
                 role = "freelancer";
                 actorId = "freelancer";
             }
         }
 
-        // X-Actor-Id may be used for audit/display purposes only; it does not grant a role.
+        // X-Actor-Id is a display label for the audit trail only; it never grants a role.
         if (actorIdHeader != null && !actorIdHeader.isBlank()) {
             actorId = actorIdHeader.trim();
         } else if (actorId == null) {
@@ -39,20 +49,21 @@ public class SecurityService {
         return new CurrentActor(actorId, role);
     }
 
-    public CurrentActor requireClient(HttpServletRequest request) {
-        CurrentActor actor = resolveActor(request);
-        if (!"client".equalsIgnoreCase(actor.role())) {
-            throw new ForbiddenException("Access denied: only authorized clients may perform this action.");
+    private static boolean tokenMatches(String presented, String expected) {
+        if (presented == null || expected == null || expected.isBlank()) {
+            return false;
         }
-        return actor;
+        return MessageDigest.isEqual(
+                presented.getBytes(StandardCharsets.UTF_8),
+                expected.getBytes(StandardCharsets.UTF_8));
+    }
+
+    public CurrentActor requireClient(HttpServletRequest request) {
+        return requireRole(request, "client");
     }
 
     public CurrentActor requireFreelancer(HttpServletRequest request) {
-        CurrentActor actor = resolveActor(request);
-        if (!"freelancer".equalsIgnoreCase(actor.role())) {
-            throw new ForbiddenException("Access denied: only authorized freelancers may perform this action.");
-        }
-        return actor;
+        return requireRole(request, "freelancer");
     }
 
     public CurrentActor requireRole(HttpServletRequest request, String expectedRole) {

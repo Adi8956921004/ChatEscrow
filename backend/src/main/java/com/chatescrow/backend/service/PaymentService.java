@@ -34,10 +34,10 @@ public class PaymentService {
     // ── Order creation ─────────────────────────────────────────────────────
 
     /**
-     * Creates a PayPal order on the backend with server-validated amount looked up from the milestone.
-     * The stored milestone amount is always used to prevent client-side tampering.
+     * Creates a PayPal order using the amount stored on the milestone, never a client-supplied value.
+     * Not wrapped in a single transaction: the FAILED status must survive the exception we rethrow,
+     * and we should not hold a DB connection open during the remote call.
      */
-    @Transactional
     public Map<String, Object> createOrder(String projectId, String milestoneId, String currency) {
         String resolvedProjectId = projectService.resolveProjectId(projectId);
         projectService.getProject(resolvedProjectId); // validate project exists
@@ -133,7 +133,14 @@ public class PaymentService {
             );
         }
 
-        // Mark CAPTURE_PENDING so concurrent calls don't double-capture.
+        if (payment.getStatus() == Payment.PaymentStatus.CANCELLED) {
+            throw new IllegalStateException("Payment was cancelled and cannot be captured: " + payment.getId());
+        }
+        if (payment.getStatus() == Payment.PaymentStatus.CAPTURE_PENDING) {
+            throw new IllegalStateException("A capture is already in progress for order " + orderId);
+        }
+
+        // Mark CAPTURE_PENDING so repeat calls are rejected while a capture is in flight.
         payment.setStatus(Payment.PaymentStatus.CAPTURE_PENDING);
         payment.setUpdatedAt(Instant.now());
         paymentRepo.saveAndFlush(payment);
@@ -149,6 +156,13 @@ public class PaymentService {
             paymentRepo.saveAndFlush(payment);
             throw e; // GlobalExceptionHandler → 504
         } catch (PayPalApiException e) {
+            if ("ORDER_ALREADY_CAPTURED".equals(e.getErrorName())) {
+                // A previous attempt (e.g. one that timed out) did go through. Read the real state
+                // instead of recording a failure for money that was actually taken.
+                log.info("Order {} already captured at PayPal — re-reading order state", orderId);
+                result = paypalService.recheckOrder(orderId);
+                return applyCapture(payment, orderId, result, "captureOrder");
+            }
             log.warn("Capture PayPal API error {} for order {} [debug_id={}] — marking FAILED",
                     e.getStatusCode(), orderId, e.getDebugId());
             payment.setStatus(Payment.PaymentStatus.FAILED);
@@ -376,6 +390,9 @@ public class PaymentService {
     @Transactional
     public Payment refundPayment(String paymentId, String reason) {
         Payment payment = getPayment(paymentId);
+        if (payment.getStatus() != Payment.PaymentStatus.CAPTURED) {
+            throw new IllegalStateException("Only a captured payment can be refunded. Current: " + payment.getStatus());
+        }
         payment.setStatus(Payment.PaymentStatus.CANCELLED);
         payment.setUpdatedAt(Instant.now());
         payment = paymentRepo.save(payment);
