@@ -117,16 +117,16 @@ public class PayPalService {
         body.put("intent", "CAPTURE");
         body.set("purchase_units", objectMapper.createArrayNode().add(purchaseUnit));
 
-        ObjectNode appContext = objectMapper.createObjectNode();
         String safeBase = appBaseUrl.endsWith("/") ? appBaseUrl.substring(0, appBaseUrl.length() - 1) : appBaseUrl;
-        appContext.put("return_url", safeBase + "/payment/success");
-        appContext.put("cancel_url", safeBase + "/payment/cancel");
-        body.set("application_context", appContext);
 
-        // Modern PayPal v2 Orders API payment_source experience_context format
+        // Modern PayPal v2 Orders API: return/cancel URLs go in payment_source.paypal.experience_context
+        ObjectNode experienceContext = objectMapper.createObjectNode();
+        experienceContext.put("return_url", safeBase + "/payment/success");
+        experienceContext.put("cancel_url", safeBase + "/payment/cancel");
+
         ObjectNode paymentSource = objectMapper.createObjectNode();
         ObjectNode paypalSource = objectMapper.createObjectNode();
-        paypalSource.set("experience_context", appContext.deepCopy());
+        paypalSource.set("experience_context", experienceContext);
         paymentSource.set("paypal", paypalSource);
         body.set("payment_source", paymentSource);
 
@@ -333,8 +333,11 @@ public class PayPalService {
 
         com.fasterxml.jackson.databind.node.ArrayNode items = objectMapper.createArrayNode();
         ObjectNode item = objectMapper.createObjectNode();
+        if (recipientEmail == null || recipientEmail.isBlank()) {
+            throw new IllegalArgumentException("Recipient email is required when live payouts are enabled");
+        }
         item.put("recipient_type", "EMAIL");
-        item.put("receiver", recipientEmail != null && !recipientEmail.isBlank() ? recipientEmail : "freelancer@example.com");
+        item.put("receiver", recipientEmail);
         item.put("note", note != null ? note : "Milestone release");
         item.put("sender_item_id", "item-" + milestoneId);
         ObjectNode amountNode = objectMapper.createObjectNode();

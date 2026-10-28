@@ -54,6 +54,22 @@ public class ProjectController {
             String milestoneId
     ) {}
 
+    public record GenerateDraftRequest(
+            String conversationText
+    ) {}
+
+    public record SaveDraftRequest(
+            String termsJson
+    ) {}
+
+    public record ApproveContractRequest(
+            String role
+    ) {}
+
+    public record RefundPaymentRequest(
+            String reason
+    ) {}
+
     // --- Projects ---
     @GetMapping("/projects")
     public List<Project> listProjects() {
@@ -84,16 +100,20 @@ public class ProjectController {
 
     // --- Contract versions ---
     @GetMapping("/projects/{projectId}/contract-versions")
-    public List<ContractVersion> getContractVersions(@PathVariable String projectId) {
+    public List<ContractVersion> getContractVersions(@PathVariable String projectId, HttpServletRequest request) {
+        Project project = projectService.getProject(projectId);
+        securityService.verifyProjectAccess(request, project);
         return contractService.getContractVersions(projectId);
     }
 
     @PostMapping("/projects/{projectId}/contract-drafts")
     public ResponseEntity<ContractVersion> generateDraft(@PathVariable String projectId,
-                                                          @RequestBody Map<String, String> body,
+                                                          @RequestBody(required = false) GenerateDraftRequest body,
                                                           HttpServletRequest request) {
         securityService.requireParticipant(request);
-        String conversation = body != null ? body.get("conversationText") : null;
+        Project project = projectService.getProject(projectId);
+        securityService.verifyProjectAccess(request, project);
+        String conversation = body != null ? body.conversationText() : null;
         if (conversation == null || conversation.isBlank()) {
             return ResponseEntity.badRequest().build();
         }
@@ -103,10 +123,12 @@ public class ProjectController {
     @PutMapping("/projects/{projectId}/contract-drafts/{draftId}")
     public ResponseEntity<ContractVersion> saveDraft(@PathVariable String projectId,
                                                       @PathVariable String draftId,
-                                                      @RequestBody Map<String, String> body,
+                                                      @RequestBody(required = false) SaveDraftRequest body,
                                                       HttpServletRequest request) {
         securityService.requireParticipant(request);
-        String termsJson = body != null ? body.get("termsJson") : null;
+        Project project = projectService.getProject(projectId);
+        securityService.verifyProjectAccess(request, project);
+        String termsJson = body != null ? body.termsJson() : null;
         return ResponseEntity.ok(contractService.saveDraft(projectId, draftId, termsJson));
     }
 
@@ -116,19 +138,23 @@ public class ProjectController {
     @PostMapping("/projects/{projectId}/contract-versions/{versionId}/approve")
     public ResponseEntity<ContractVersion> approveContract(@PathVariable String projectId,
                                                             @PathVariable String versionId,
-                                                            @RequestBody Map<String, String> body,
+                                                            @RequestBody ApproveContractRequest body,
                                                             HttpServletRequest request) {
-        String role = body.get("role"); // "client" or "freelancer"
+        String role = body != null ? body.role() : null; // "client" or "freelancer"
         if (role == null || role.isBlank()) {
             return ResponseEntity.badRequest().build();
         }
         securityService.requireRole(request, role);
+        Project project = projectService.getProject(projectId);
+        securityService.verifyProjectAccess(request, project);
         return ResponseEntity.ok(contractService.approveVersion(versionId, role));
     }
 
     // --- Milestones ---
     @GetMapping("/projects/{projectId}/milestones")
-    public List<Milestone> getMilestones(@PathVariable String projectId) {
+    public List<Milestone> getMilestones(@PathVariable String projectId, HttpServletRequest request) {
+        Project project = projectService.getProject(projectId);
+        securityService.verifyProjectAccess(request, project);
         return projectService.getMilestones(projectId);
     }
 
@@ -140,6 +166,8 @@ public class ProjectController {
                                                       @RequestBody CreateMilestoneRequest body,
                                                       HttpServletRequest request) {
         securityService.requireClient(request);
+        Project project = projectService.getProject(projectId);
+        securityService.verifyProjectAccess(request, project);
         return ResponseEntity.ok(projectService.createMilestone(
                 projectId, body.title(), body.amount(), body.dueDate(),
                 body.deliverables(), body.acceptanceCriteria(), body.description(), body.contractVersionId()));
@@ -147,7 +175,9 @@ public class ProjectController {
 
     // --- Timeline ---
     @GetMapping("/projects/{projectId}/timeline")
-    public List<AuditEvent> getTimeline(@PathVariable String projectId) {
+    public List<AuditEvent> getTimeline(@PathVariable String projectId, HttpServletRequest request) {
+        Project project = projectService.getProject(projectId);
+        securityService.verifyProjectAccess(request, project);
         return projectService.getTimeline(projectId);
     }
 
@@ -156,8 +186,11 @@ public class ProjectController {
      * Creates PayPal order. Amount is looked up server-side from milestone to prevent client tampering.
      */
     @PostMapping("/payments/paypal/orders")
-    public ResponseEntity<Map<String, Object>> createOrder(@RequestBody CreateOrderRequest body) {
+    public ResponseEntity<Map<String, Object>> createOrder(@RequestBody CreateOrderRequest body,
+                                                           HttpServletRequest request) {
         String currency = body.currency() != null ? body.currency() : "USD";
+        Project project = projectService.getProject(body.projectId());
+        securityService.verifyProjectAccess(request, project);
         return ResponseEntity.ok(paymentService.createOrder(body.projectId(), body.milestoneId(), currency));
     }
 
@@ -208,6 +241,8 @@ public class ProjectController {
     public ResponseEntity<Payment> demoDeposit(@RequestBody DemoDepositRequest body,
                                                HttpServletRequest request) {
         securityService.requireClient(request);
+        Project project = projectService.getProject(body.projectId());
+        securityService.verifyProjectAccess(request, project);
         return ResponseEntity.ok(paymentService.recordDemoPayment(body.projectId(), body.milestoneId()));
     }
 
@@ -216,15 +251,20 @@ public class ProjectController {
      */
     @PostMapping("/payments/{paymentId}/refund")
     public ResponseEntity<Payment> refundPayment(@PathVariable String paymentId,
-                                                @RequestBody(required = false) Map<String, String> body,
+                                                @RequestBody(required = false) RefundPaymentRequest body,
                                                 HttpServletRequest request) {
         securityService.requireClient(request);
-        String reason = body != null ? body.get("reason") : "Refund requested";
+        Payment payment = paymentService.getPayment(paymentId);
+        Project project = projectService.getProject(payment.getProjectId());
+        securityService.verifyProjectAccess(request, project);
+        String reason = (body != null && body.reason() != null) ? body.reason() : "Refund requested";
         return ResponseEntity.ok(paymentService.refundPayment(paymentId, reason));
     }
 
     @GetMapping("/projects/{projectId}/payments")
-    public List<Payment> getProjectPayments(@PathVariable String projectId) {
+    public List<Payment> getProjectPayments(@PathVariable String projectId, HttpServletRequest request) {
+        Project project = projectService.getProject(projectId);
+        securityService.verifyProjectAccess(request, project);
         return paymentService.getProjectPayments(projectId);
     }
 

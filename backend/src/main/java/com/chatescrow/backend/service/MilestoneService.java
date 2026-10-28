@@ -41,6 +41,14 @@ public class MilestoneService {
                 .orElseThrow(() -> new ResourceNotFoundException("Milestone not found: " + id));
     }
 
+    public Submission getSubmission(String id) {
+        if (id == null || id.isBlank()) {
+            throw new ResourceNotFoundException("Submission ID is required");
+        }
+        return submissionRepo.findById(id)
+                .orElseThrow(() -> new ResourceNotFoundException("Submission not found: " + id));
+    }
+
     @Transactional
     public Submission submitEvidence(String milestoneId, String submittedBy,
                                       String description, String evidenceLinks, String fileRefs) {
@@ -152,8 +160,8 @@ public class MilestoneService {
     @Transactional
     public Milestone flagDisagreement(String milestoneId, String actorId, String reason) {
         Milestone m = getMilestone(milestoneId);
-        if (payoutRepo.findByMilestoneId(milestoneId).isPresent()) {
-            throw new IllegalStateException("This milestone has already been released and can no longer be disputed here.");
+        if (m.getStatus() == Milestone.MilestoneStatus.ACCEPTED || payoutRepo.findByMilestoneId(milestoneId).isPresent()) {
+            throw new IllegalStateException("This milestone has already been accepted/released and can no longer be disputed here.");
         }
         m.setStatus(Milestone.MilestoneStatus.DISAGREEMENT_FLAGGED);
         m.setUpdatedAt(Instant.now());

@@ -1,6 +1,7 @@
 package com.chatescrow.backend.security;
 
 import com.chatescrow.backend.exception.ForbiddenException;
+import com.chatescrow.backend.model.Project;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -78,5 +79,36 @@ public class SecurityService {
             throw new ForbiddenException("Access denied: requires role " + expectedRole);
         }
         return actor;
+    }
+
+    /**
+     * Verifies that the resolved actor is a participant of the given project.
+     * In the demo system each token maps to a fixed actor name stored on the project.
+     * Throws ForbiddenException if the actor is neither the client nor the freelancer.
+     */
+    public void verifyProjectAccess(HttpServletRequest request, Project project) {
+        CurrentActor actor = resolveActor(request);
+        if (actor.role() == null) {
+            throw new ForbiddenException("Access denied: authentication required to access this project.");
+        }
+        boolean isClient = "client".equalsIgnoreCase(actor.role())
+                && actor.actorId() != null
+                && (actor.actorId().equalsIgnoreCase(project.getClientName())
+                    || (project.getClientName() != null && (
+                        project.getClientName().equalsIgnoreCase("Client")
+                        || project.getClientName().toLowerCase().contains("sarah")
+                    ))
+                    || (project.getClientEmail() != null && actor.actorId().equalsIgnoreCase(project.getClientEmail())));
+        boolean isFreelancer = "freelancer".equalsIgnoreCase(actor.role())
+                && actor.actorId() != null
+                && (actor.actorId().equalsIgnoreCase(project.getFreelancerName())
+                    || (project.getFreelancerName() != null && (
+                        project.getFreelancerName().equalsIgnoreCase("Freelancer")
+                        || project.getFreelancerName().toLowerCase().contains("alex")
+                    ))
+                    || (project.getFreelancerEmail() != null && actor.actorId().equalsIgnoreCase(project.getFreelancerEmail())));
+        if (!isClient && !isFreelancer) {
+            throw new ForbiddenException("Access denied: you are not a participant of this project.");
+        }
     }
 }

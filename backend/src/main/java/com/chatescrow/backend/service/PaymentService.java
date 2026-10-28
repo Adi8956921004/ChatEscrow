@@ -140,10 +140,30 @@ public class PaymentService {
             throw new IllegalStateException("A capture is already in progress for order " + orderId);
         }
 
-        // Mark CAPTURE_PENDING so repeat calls are rejected while a capture is in flight.
-        payment.setStatus(Payment.PaymentStatus.CAPTURE_PENDING);
-        payment.setUpdatedAt(Instant.now());
-        paymentRepo.saveAndFlush(payment);
+        // Atomically transition status to CAPTURE_PENDING at DB level to prevent concurrent captures
+        int rowsUpdated = paymentRepo.updateStatusIfIn(
+                orderId,
+                Payment.PaymentStatus.CAPTURE_PENDING,
+                java.util.List.of(Payment.PaymentStatus.APPROVAL_PENDING, Payment.PaymentStatus.UNKNOWN),
+                Instant.now()
+        );
+        if (rowsUpdated == 0) {
+            Payment current = paymentRepo.findByProviderOrderId(orderId).orElse(payment);
+            if (current.getStatus() == Payment.PaymentStatus.CAPTURE_PENDING) {
+                throw new IllegalStateException("A capture is already in progress for order " + orderId);
+            } else if (current.getStatus() == Payment.PaymentStatus.CAPTURED) {
+                return Map.of(
+                        "status", "CAPTURED",
+                        "alreadyCaptured", true,
+                        "paymentId", current.getId(),
+                        "orderId", orderId,
+                        "captureId", current.getProviderCaptureId() != null ? current.getProviderCaptureId() : ""
+                );
+            } else {
+                throw new IllegalStateException("Payment cannot be captured in its current status: " + current.getStatus());
+            }
+        }
+        payment = paymentRepo.findByProviderOrderId(orderId).orElse(payment);
 
         PayPalService.PayPalCaptureResult result;
         try {

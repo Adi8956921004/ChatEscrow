@@ -3,6 +3,7 @@ package com.chatescrow.backend.controller;
 import com.chatescrow.backend.model.*;
 import com.chatescrow.backend.security.SecurityService;
 import com.chatescrow.backend.service.MilestoneService;
+import com.chatescrow.backend.service.ProjectService;
 import jakarta.servlet.http.HttpServletRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +18,26 @@ public class MilestoneController {
 
     private final MilestoneService milestoneService;
     private final SecurityService securityService;
+    private final ProjectService projectService;
+
+    public record SubmitEvidenceRequest(
+            String description,
+            String evidenceLinks,
+            String fileReferences
+    ) {}
+
+    public record RequestRevisionRequest(
+            String note
+    ) {}
+
+    public record FlagDisagreementRequest(
+            String reason
+    ) {}
+
+    private Project getProjectForMilestone(String milestoneId) {
+        Milestone m = milestoneService.getMilestone(milestoneId);
+        return projectService.getProject(m.getProjectId());
+    }
 
     @GetMapping("/milestones/{milestoneId}")
     public Milestone getMilestone(@PathVariable String milestoneId) {
@@ -28,12 +49,13 @@ public class MilestoneController {
      */
     @PostMapping("/milestones/{milestoneId}/submissions")
     public ResponseEntity<Submission> submitEvidence(@PathVariable String milestoneId,
-                                                      @RequestBody Map<String, String> body,
+                                                      @RequestBody(required = false) SubmitEvidenceRequest body,
                                                       HttpServletRequest request) {
         SecurityService.CurrentActor actor = securityService.requireFreelancer(request);
-        String description = body.get("description");
-        String evidenceLinks = body.get("evidenceLinks");
-        String fileRefs = body.get("fileReferences");
+        securityService.verifyProjectAccess(request, getProjectForMilestone(milestoneId));
+        String description = body != null ? body.description() : null;
+        String evidenceLinks = body != null ? body.evidenceLinks() : null;
+        String fileRefs = body != null ? body.fileReferences() : null;
         return ResponseEntity.ok(milestoneService.submitEvidence(
                 milestoneId, actor.actorId(), description, evidenceLinks, fileRefs));
     }
@@ -47,6 +69,8 @@ public class MilestoneController {
     public ResponseEntity<AcceptanceReport> evaluateSubmission(@PathVariable String submissionId,
                                                               HttpServletRequest request) {
         securityService.requireParticipant(request);
+        Submission sub = milestoneService.getSubmission(submissionId);
+        securityService.verifyProjectAccess(request, getProjectForMilestone(sub.getMilestoneId()));
         return ResponseEntity.ok(milestoneService.evaluateSubmission(submissionId));
     }
 
@@ -62,6 +86,7 @@ public class MilestoneController {
     public ResponseEntity<?> acceptMilestone(@PathVariable String milestoneId,
                                               HttpServletRequest request) {
         SecurityService.CurrentActor actor = securityService.requireClient(request);
+        securityService.verifyProjectAccess(request, getProjectForMilestone(milestoneId));
         return ResponseEntity.ok(milestoneService.acceptMilestone(milestoneId, actor.actorId()));
     }
 
@@ -70,10 +95,11 @@ public class MilestoneController {
      */
     @PostMapping("/milestones/{milestoneId}/request-revision")
     public ResponseEntity<Milestone> requestRevision(@PathVariable String milestoneId,
-                                                      @RequestBody Map<String, String> body,
+                                                      @RequestBody(required = false) RequestRevisionRequest body,
                                                       HttpServletRequest request) {
         SecurityService.CurrentActor actor = securityService.requireClient(request);
-        String note = body != null ? body.get("note") : null;
+        securityService.verifyProjectAccess(request, getProjectForMilestone(milestoneId));
+        String note = body != null ? body.note() : null;
         return ResponseEntity.ok(milestoneService.requestRevision(milestoneId, actor.actorId(), note));
     }
 
@@ -82,10 +108,11 @@ public class MilestoneController {
      */
     @PostMapping("/milestones/{milestoneId}/flag-disagreement")
     public ResponseEntity<Milestone> flagDisagreement(@PathVariable String milestoneId,
-                                                       @RequestBody Map<String, String> body,
+                                                       @RequestBody(required = false) FlagDisagreementRequest body,
                                                        HttpServletRequest request) {
         SecurityService.CurrentActor actor = securityService.requireClient(request);
-        String reason = body != null ? body.get("reason") : null;
+        securityService.verifyProjectAccess(request, getProjectForMilestone(milestoneId));
+        String reason = body != null ? body.reason() : null;
         return ResponseEntity.ok(milestoneService.flagDisagreement(milestoneId, actor.actorId(), reason));
     }
 
@@ -97,6 +124,7 @@ public class MilestoneController {
     public ResponseEntity<?> releaseMilestone(@PathVariable String milestoneId,
                                               HttpServletRequest request) {
         SecurityService.CurrentActor actor = securityService.requireClient(request);
+        securityService.verifyProjectAccess(request, getProjectForMilestone(milestoneId));
         return ResponseEntity.ok(milestoneService.releaseMilestone(milestoneId, actor.actorId()));
     }
 
