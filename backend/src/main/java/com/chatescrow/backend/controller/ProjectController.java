@@ -220,10 +220,16 @@ public class ProjectController {
 
     /**
      * Captures PayPal order. Returns 200 on CAPTURED, 409 on UNKNOWN (indeterminate / mismatch),
-     * or 422 on a definitive failure.
+     * or 422 on a definitive failure. Verifies order exists and project access.
      */
     @PostMapping("/payments/paypal/orders/{orderId}/capture")
-    public ResponseEntity<Map<String, Object>> captureOrder(@PathVariable String orderId) {
+    public ResponseEntity<Map<String, Object>> captureOrder(@PathVariable String orderId, HttpServletRequest request) {
+        Payment payment = paymentService.getPaymentByOrderId(orderId);
+        SecurityService.CurrentActor actor = securityService.resolveActor(request);
+        if (actor.role() != null) {
+            securityService.verifyProjectAccess(request, projectService.getProject(payment.getProjectId()));
+        }
+
         Map<String, Object> result = paymentService.captureOrder(orderId);
         String status = (String) result.get("status");
         if ("CAPTURED".equalsIgnoreCase(status)) {
@@ -244,7 +250,13 @@ public class ProjectController {
      * Use after a timeout or amount-mismatch to confirm whether money was actually taken.
      */
     @PostMapping("/payments/paypal/orders/{orderId}/recheck")
-    public ResponseEntity<Map<String, Object>> recheckPayment(@PathVariable String orderId) {
+    public ResponseEntity<Map<String, Object>> recheckPayment(@PathVariable String orderId, HttpServletRequest request) {
+        Payment payment = paymentService.getPaymentByOrderId(orderId);
+        SecurityService.CurrentActor actor = securityService.resolveActor(request);
+        if (actor.role() != null) {
+            securityService.verifyProjectAccess(request, projectService.getProject(payment.getProjectId()));
+        }
+
         Map<String, Object> result = paymentService.recheckPayment(orderId);
         String status = (String) result.get("status");
         if ("CAPTURED".equalsIgnoreCase(status)) {

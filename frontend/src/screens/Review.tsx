@@ -67,25 +67,13 @@ export function Review({ navigate, projectId }: { navigate: (s: Screen) => void;
   const handleSubmitEvidence = async () => {
     if (!selectedMilestone || !evidenceDesc) return
     setSubmitting(true); setError(null)
-    const freelancerName = project?.freelancerName ?? "Freelancer"
     try {
-      const sub = await submitEvidence(selectedMilestone.id, { submittedBy: freelancerName, description: evidenceDesc, evidenceLinks })
+      const sub = await submitEvidence(selectedMilestone.id, { description: evidenceDesc, evidenceLinks })
       setSubmissions((prev) => [sub, ...prev])
       setEvidenceDesc(""); setEvidenceLinks("")
       setSelectedMilestone((prev) => prev ? { ...prev, status: "SUBMITTED" } : null)
-    } catch {
-      // Local fallback if backend unavailable
-      const localSub: Submission = {
-        id: "sub-" + Date.now(),
-        milestoneId: selectedMilestone.id,
-        submittedBy: `${freelancerName} (Freelancer)`,
-        description: evidenceDesc,
-        evidenceLinks,
-        createdAt: new Date().toISOString(),
-      }
-      setSubmissions((prev) => [localSub, ...prev])
-      setEvidenceDesc(""); setEvidenceLinks("")
-      setSelectedMilestone((prev) => prev ? { ...prev, status: "SUBMITTED" } : null)
+    } catch (err) {
+      setError("Failed to submit evidence: " + (err instanceof Error ? err.message : String(err)))
     } finally {
       setSubmitting(false)
     }
@@ -202,21 +190,8 @@ export function Review({ navigate, projectId }: { navigate: (s: Screen) => void;
       const pack = await getDisputePack(selectedMilestone.id)
       setDisputePack(pack)
       setDisputePackOpen(true)
-    } catch {
-      setDisputePack({
-        milestone: selectedMilestone,
-        project: {
-          title: project?.title ?? "Project Agreement",
-          clientName: project?.clientName ?? "Sarah Miller",
-          freelancerName: project?.freelancerName ?? "Alex Carter",
-        },
-        submissions,
-        auditTimeline: [
-          { id: "e1", eventType: "MILESTONE_ACCEPTED", actorName: "Sarah Miller", createdAt: new Date().toISOString() },
-        ],
-        disclaimer: "Assembled for transparency and neutral dispute review.",
-      })
-      setDisputePackOpen(true)
+    } catch (err) {
+      setError("Failed to load Dispute Pack from server: " + (err instanceof Error ? err.message : String(err)))
     } finally {
       setLoadingDisputePack(false)
     }
@@ -316,7 +291,7 @@ export function Review({ navigate, projectId }: { navigate: (s: Screen) => void;
               <Field label="Evidence links / Proof URLs" hint="Deployment links, Git PRs, Figma frames, or test reports">
                 <input value={evidenceLinks} onChange={(e) => setEvidenceLinks(e.target.value)} className="field text-xs" placeholder="https://preview.example.com" />
               </Field>
-              <Button icon="upload" loading={submitting} onClick={handleSubmitEvidence} disabled={!evidenceDesc.trim()}>
+              <Button icon="link" loading={submitting} onClick={handleSubmitEvidence} disabled={!evidenceDesc.trim()}>
                 Submit Evidence for Review
               </Button>
             </div>

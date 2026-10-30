@@ -33,6 +33,6 @@ public class Payment {
 
     public enum PaymentStatus {
         NOT_CREATED, ORDER_CREATED, APPROVAL_PENDING, CAPTURE_PENDING,
-        CAPTURED, FAILED, CANCELLED, UNKNOWN
+        CAPTURED, FAILED, CANCELLED, REFUNDED, UNKNOWN
     }
 }

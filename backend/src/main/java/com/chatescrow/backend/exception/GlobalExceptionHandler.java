@@ -39,6 +39,15 @@ public class GlobalExceptionHandler {
         return errorBody(HttpStatus.BAD_REQUEST, ex.getMessage());
     }
 
+    @ExceptionHandler(org.springframework.web.bind.MethodArgumentNotValidException.class)
+    public ResponseEntity<Map<String, Object>> handleValidationException(org.springframework.web.bind.MethodArgumentNotValidException ex) {
+        String msg = ex.getBindingResult().getFieldErrors().stream()
+                .map(err -> err.getField() + ": " + err.getDefaultMessage())
+                .reduce((a, b) -> a + ", " + b)
+                .orElse("Validation failed");
+        return errorBody(HttpStatus.BAD_REQUEST, msg);
+    }
+
     /**
      * Illegal state: e.g. "payment not captured" or "milestone not accepted".
      * Maps to 409 Conflict rather than 500 so clients can react meaningfully.

@@ -155,6 +155,9 @@ public class MilestoneService {
     @Transactional
     public Milestone flagDisagreement(String milestoneId, String actorId, String reason) {
         Milestone m = getMilestone(milestoneId);
+        if (m.getStatus() == Milestone.MilestoneStatus.NOT_STARTED) {
+            throw new IllegalStateException("Cannot dispute a milestone that has not started yet. Status: " + m.getStatus());
+        }
         if (m.getStatus() == Milestone.MilestoneStatus.ACCEPTED || payoutRepo.findByMilestoneId(milestoneId).isPresent()) {
             throw new IllegalStateException("This milestone has already been accepted/released and can no longer be disputed here.");
         }
@@ -217,14 +220,17 @@ public class MilestoneService {
             return resp;
         }
 
-        // Require a captured payment before releasing funds
+        // Require a captured payment with matching currency before releasing funds
+        String releaseCurrency = m.getCurrency() != null ? m.getCurrency() : "USD";
         List<Payment> payments = paymentRepo.findByMilestoneId(milestoneId);
         List<Payment> capturedPayments = payments.stream()
                 .filter(p -> p.getStatus() == Payment.PaymentStatus.CAPTURED)
+                .filter(p -> p.getCurrency() == null || p.getCurrency().equalsIgnoreCase(releaseCurrency))
                 .toList();
 
         if (capturedPayments.isEmpty()) {
-            throw new IllegalStateException("Cannot release milestone: no captured payment found for milestone " + milestoneId + ". Fund the milestone via PayPal before releasing.");
+            throw new IllegalStateException("Cannot release milestone: no captured payment found with currency " +
+                    releaseCurrency + " for milestone " + milestoneId + ". Fund the milestone via PayPal before releasing.");
         }
 
         BigDecimal capturedTotal = capturedPayments.stream()
@@ -232,8 +238,8 @@ public class MilestoneService {
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
         if (m.getAmount() != null && capturedTotal.compareTo(m.getAmount()) < 0) {
-            throw new IllegalStateException("Cannot release milestone: captured payment total (" + capturedTotal +
-                    ") is less than milestone amount (" + m.getAmount() + ").");
+            throw new IllegalStateException("Cannot release milestone: captured payment total (" + capturedTotal + " " + releaseCurrency +
+                    ") is less than milestone amount (" + m.getAmount() + " " + releaseCurrency + ").");
         }
 
         // Check if funded via DEMO_ESCROW
@@ -255,7 +261,6 @@ public class MilestoneService {
                 : project.getFreelancerName().toLowerCase().replace(" ", "") + "@example.com";
 
         BigDecimal releaseAmount = m.getAmount() != null ? m.getAmount() : BigDecimal.ZERO;
-        String releaseCurrency = m.getCurrency() != null ? m.getCurrency() : "USD";
         String idempotencyKey = "payout-" + milestoneId;
 
         PayPalService.PayoutResult payoutResult;
@@ -296,7 +301,24 @@ public class MilestoneService {
                 .provider(effectiveProvider)
                 .releasedAt(Instant.now())
                 .build();
-        payoutRepo.save(payout);
+        try {
+            payoutRepo.save(payout);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            log.warn("Concurrent payout save detected for milestoneId {}, re-reading existing payout", milestoneId);
+            Payout existing = payoutRepo.findByMilestoneId(milestoneId).orElseThrow(() -> e);
+            Map<String, Object> resp = new HashMap<>();
+            resp.put("milestoneId", milestoneId);
+            resp.put("amount", existing.getAmount());
+            resp.put("currency", existing.getCurrency());
+            resp.put("recipient", existing.getRecipientEmail());
+            resp.put("payoutBatchId", existing.getPayoutBatchId());
+            resp.put("payoutStatus", existing.getStatus());
+            resp.put("isSimulated", existing.isSimulated());
+            resp.put("provider", existing.getProvider());
+            resp.put("alreadyReleased", true);
+            resp.put("message", "Milestone payout has already been released (handled concurrent release).");
+            return resp;
+        }
 
         try {
             ObjectNode meta = objectMapper.createObjectNode();

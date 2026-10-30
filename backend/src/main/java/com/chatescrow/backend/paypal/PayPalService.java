@@ -368,6 +368,46 @@ public class PayPalService {
         }
     }
 
+    /**
+     * Executes a refund on a captured PayPal payment using /v2/payments/captures/{capture_id}/refund.
+     */
+    public String refundCapture(String captureId, BigDecimal amount, String currency, String note) {
+        if (!isConfigured()) {
+            throw new PayPalNotConfiguredException("PayPal credentials not configured.");
+        }
+        String token = getAccessToken();
+        ObjectNode body = objectMapper.createObjectNode();
+        if (amount != null && currency != null) {
+            ObjectNode amountObj = objectMapper.createObjectNode();
+            amountObj.put("value", amount.toPlainString());
+            amountObj.put("currency_code", currency);
+            body.set("amount", amountObj);
+        }
+        if (note != null && !note.isBlank()) {
+            body.put("note_to_payer", note.length() > 255 ? note.substring(0, 255) : note);
+        }
+
+        String requestId = "refund-req-" + UUID.randomUUID();
+
+        try {
+            String response = webClient.post()
+                    .uri(baseUrl + "/v2/payments/captures/" + captureId + "/refund")
+                    .header(HttpHeaders.AUTHORIZATION, "Bearer " + token)
+                    .header("PayPal-Request-Id", requestId)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .bodyValue(body.toString())
+                    .retrieve()
+                    .bodyToMono(String.class)
+                    .block();
+
+            JsonNode node = objectMapper.readTree(response);
+            return node.has("id") ? node.get("id").asText() : captureId + "-refunded";
+        } catch (Exception e) {
+            log.error("PayPal capture refund failed for captureId {}", captureId, e);
+            throw new RuntimeException("PayPal refund failed: " + e.getMessage(), e);
+        }
+    }
+
     public record PayPalOrderResult(String orderId, String approveUrl, String status) {}
     public record PayPalCaptureResult(String orderId, String captureId, String status, BigDecimal amount, String currency) {
         public PayPalCaptureResult(String orderId, String captureId, String status, BigDecimal amount) {

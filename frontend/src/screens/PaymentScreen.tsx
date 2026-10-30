@@ -53,12 +53,11 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
     const params = new URLSearchParams(window.location.search)
     const token = params.get("token")
     if (token) {
+      window.history.replaceState({}, document.title, window.location.pathname)
       const pendingOrder = sessionStorage.getItem("chatescrow_pending_order")
-      if (pendingOrder === token || payments.some((p) => p.providerOrderId === token)) {
-        handleCaptureOrder(token).then(() => {
-          sessionStorage.removeItem("chatescrow_pending_order")
-          window.history.replaceState({}, document.title, window.location.pathname)
-        })
+      if (pendingOrder === token) {
+        sessionStorage.removeItem("chatescrow_pending_order")
+        handleCaptureOrder(token)
       }
     }
   }, [projectId])

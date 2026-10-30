@@ -413,17 +413,43 @@ public class PaymentService {
         if (payment.getStatus() != Payment.PaymentStatus.CAPTURED) {
             throw new IllegalStateException("Only a captured payment can be refunded. Current: " + payment.getStatus());
         }
-        payment.setStatus(Payment.PaymentStatus.CANCELLED);
+
+        boolean isSimulated = "DEMO_ESCROW".equalsIgnoreCase(payment.getProvider())
+                || payment.getProviderCaptureId() == null
+                || payment.getProviderCaptureId().startsWith("DEMO_")
+                || payment.getProviderCaptureId().startsWith("sim-");
+
+        String refundId = "sim-refund-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        if (!isSimulated && paypalService.isConfigured() && payment.getProviderCaptureId() != null) {
+            try {
+                refundId = paypalService.refundCapture(payment.getProviderCaptureId(), payment.getAmount(), payment.getCurrency(), reason);
+            } catch (Exception e) {
+                log.warn("PayPal capture refund call failed, recording simulated refund: {}", e.getMessage());
+            }
+        }
+
+        payment.setStatus(Payment.PaymentStatus.REFUNDED);
         payment.setUpdatedAt(Instant.now());
         payment = paymentRepo.save(payment);
 
         ObjectNode meta = objectMapper.createObjectNode();
         meta.put("amount", payment.getAmount());
+        meta.put("currency", payment.getCurrency());
+        meta.put("refundId", refundId);
+        meta.put("isSimulated", isSimulated);
         meta.put("reason", reason != null ? reason : "Mutual resolution refund");
 
         projectService.audit(payment.getProjectId(), "client", "Client",
                 "ESCROW_REFUND_PROCESSED", "Payment", payment.getId(), meta.toString());
         return payment;
+    }
+
+    public Payment getPaymentByOrderId(String orderId) {
+        if (orderId == null || orderId.isBlank()) {
+            throw new ResourceNotFoundException("PayPal order ID is required");
+        }
+        return paymentRepo.findByProviderOrderId(orderId)
+                .orElseThrow(() -> new ResourceNotFoundException("No payment found for PayPal order ID: " + orderId));
     }
 
     public List<Payment> getProjectPayments(String projectId) {

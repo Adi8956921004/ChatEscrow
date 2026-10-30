@@ -47,6 +47,7 @@ public class AiService {
 
     public record ContractExtractionResult(String termsJson, boolean isLive, String modelName) {}
     public record AcceptanceEvaluationResult(String reportJson, boolean isLive, String modelName) {}
+    public record DisputeMediationResult(String mediationJson, boolean isLive, String modelName, BigDecimal clientAmount, BigDecimal freelancerAmount) {}
 
     private volatile boolean lastCallLive = false;
 
@@ -72,6 +73,9 @@ public class AiService {
      * Returns a thread-safe ContractExtractionResult carrying the terms JSON, live flag, and model name.
      */
     public ContractExtractionResult extractContractDetailed(String conversationText) {
+        if (conversationText != null && conversationText.length() > 20000) {
+            conversationText = conversationText.substring(0, 20000);
+        }
         if (!isConfigured()) {
             lastCallLive = false;
             log.info("AI_API_KEY not configured – extracting contract directly from conversation");
@@ -133,6 +137,12 @@ public class AiService {
      * Returns a thread-safe AcceptanceEvaluationResult containing the report JSON, live flag, and model name.
      */
     public AcceptanceEvaluationResult evaluateSubmissionDetailed(String acceptanceCriteria, String submissionDescription, String evidenceLinks) {
+        if (submissionDescription != null && submissionDescription.length() > 5000) {
+            submissionDescription = submissionDescription.substring(0, 5000);
+        }
+        if (evidenceLinks != null && evidenceLinks.length() > 2000) {
+            evidenceLinks = evidenceLinks.substring(0, 2000);
+        }
         if (!isConfigured()) {
             lastCallLive = false;
             log.info("AI_API_KEY not configured – generating demo acceptance evaluation grounded in criteria");
@@ -189,6 +199,76 @@ public class AiService {
 
     public String evaluateSubmission(String acceptanceCriteria, String submissionDescription, String evidenceLinks) {
         return evaluateSubmissionDetailed(acceptanceCriteria, submissionDescription, evidenceLinks).reportJson();
+    }
+
+    /**
+     * AI-assisted advisory dispute mediation.
+     * Evaluates evidence and reasons to recommend an advisory financial split.
+     * Guaranteed: clientAmount + freelancerAmount strictly equals total milestone amount.
+     */
+    public DisputeMediationResult mediateDispute(String criteria, String submissionDesc, BigDecimal totalAmount, String reason) {
+        BigDecimal safeTotal = totalAmount != null && totalAmount.compareTo(BigDecimal.ZERO) > 0 ? totalAmount : BigDecimal.valueOf(100);
+
+        if (!isConfigured()) {
+            // Balanced 50/50 fallback split
+            BigDecimal half = safeTotal.divide(BigDecimal.valueOf(2), 2, java.math.RoundingMode.HALF_UP);
+            BigDecimal remainder = safeTotal.subtract(half);
+            ObjectNode demoNode = mapper.createObjectNode();
+            demoNode.put("clientAmount", half);
+            demoNode.put("freelancerAmount", remainder);
+            demoNode.put("summary", "Advisory Mediation Recommendation: 50/50 split based on partial evidence submitted.");
+            demoNode.put("reasoning", "In demo mode without live AI credentials, an advisory split is calculated.");
+            demoNode.put("isAdvisory", true);
+            return new DisputeMediationResult(demoNode.toString(), false, "demo-mode", half, remainder);
+        }
+
+        String systemPrompt = """
+                You are a neutral dispute mediator for ChatEscrow.
+                Analyze the milestone acceptance criteria, work submitted, and dispute reason.
+                Provide an advisory, non-binding dispute resolution recommendation and recommended financial split.
+                RULES:
+                - The recommendation is purely ADVISORY. Humans make the final decision.
+                - clientAmount and freelancerAmount must be non-negative numbers summing to the exact milestone total.
+                Return ONLY a JSON object:
+                {
+                  "clientAmount": number,
+                  "freelancerAmount": number,
+                  "summary": "string",
+                  "reasoning": "string",
+                  "isAdvisory": true
+                }
+                """;
+
+        String userPrompt = "MILESTONE TOTAL AMOUNT: " + safeTotal + "\n"
+                + "CRITERIA: " + (criteria != null ? criteria : "None") + "\n"
+                + "SUBMISSION: " + (submissionDesc != null ? submissionDesc : "None") + "\n"
+                + "DISPUTE REASON: " + (reason != null ? reason : "Mutual disagreement");
+
+        try {
+            String rawJson = callGemini(systemPrompt, userPrompt);
+            JsonNode node = mapper.readTree(rawJson);
+            BigDecimal clientAmount = node.has("clientAmount") ? BigDecimal.valueOf(node.get("clientAmount").asDouble()) : BigDecimal.ZERO;
+            if (clientAmount.compareTo(BigDecimal.ZERO) < 0) clientAmount = BigDecimal.ZERO;
+            if (clientAmount.compareTo(safeTotal) > 0) clientAmount = safeTotal;
+            BigDecimal freelancerAmount = safeTotal.subtract(clientAmount);
+
+            ((ObjectNode) node).put("clientAmount", clientAmount);
+            ((ObjectNode) node).put("freelancerAmount", freelancerAmount);
+            ((ObjectNode) node).put("isAdvisory", true);
+
+            return new DisputeMediationResult(node.toString(), true, getModel() + " (live)", clientAmount, freelancerAmount);
+        } catch (Exception e) {
+            log.warn("Gemini call failed for dispute mediation: {} – falling back to balanced split", e.getMessage());
+            BigDecimal half = safeTotal.divide(BigDecimal.valueOf(2), 2, java.math.RoundingMode.HALF_UP);
+            BigDecimal remainder = safeTotal.subtract(half);
+            ObjectNode fallbackNode = mapper.createObjectNode();
+            fallbackNode.put("clientAmount", half);
+            fallbackNode.put("freelancerAmount", remainder);
+            fallbackNode.put("summary", "Advisory Mediation Recommendation (Fallback): 50/50 split.");
+            fallbackNode.put("reasoning", "Live AI service was temporarily unreachable.");
+            fallbackNode.put("isAdvisory", true);
+            return new DisputeMediationResult(fallbackNode.toString(), false, "demo-mode (fallback)", half, remainder);
+        }
     }
 
     private String callGemini(String systemInstructionText, String userContentText) {
