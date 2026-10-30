@@ -250,27 +250,38 @@ class ChatEscrowApplicationTests {
     }
 
     @Test
-    @DisplayName("Forged signature and duplicate webhook handling")
+    @DisplayName("Forged signature is rejected and duplicate webhook handling is idempotent")
     void forgedAndDuplicateWebhookHandling() throws Exception {
         when(paypalService.isConfigured()).thenReturn(true);
         when(paypalService.verifyWebhookSignature(any(), any(), any(), any(), any(), any(), any()))
                 .thenReturn(false); // Forged signature
 
-        // 1. Forged signature webhook receives received with status FAILED
+        // 1. Forged signature webhook is rejected with 400 Bad Request
         mockMvc.perform(post("/api/webhooks/paypal")
                         .header("PAYPAL-TRANSMISSION-ID", "fake-tx-123")
                         .header("PAYPAL-TRANSMISSION-SIG", "fake-sig")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"id\":\"WH-FORGED-1\",\"event_type\":\"PAYMENT.CAPTURE.COMPLETED\"}"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.verificationStatus").value("FAILED"));
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.reason").value("signature_verification_failed"));
 
-        // 2. Duplicate webhook event gets duplicate_ignored
+        // 2. Verified webhook succeeds on first call
+        when(paypalService.verifyWebhookSignature(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(true);
         mockMvc.perform(post("/api/webhooks/paypal")
-                        .header("PAYPAL-TRANSMISSION-ID", "fake-tx-123")
-                        .header("PAYPAL-TRANSMISSION-SIG", "fake-sig")
+                        .header("PAYPAL-TRANSMISSION-ID", "valid-tx-456")
+                        .header("PAYPAL-TRANSMISSION-SIG", "valid-sig")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"id\":\"WH-FORGED-1\",\"event_type\":\"PAYMENT.CAPTURE.COMPLETED\"}"))
+                        .content("{\"id\":\"WH-VALID-1\",\"event_type\":\"PAYMENT.CAPTURE.COMPLETED\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("received"));
+
+        // 3. Duplicate webhook event gets duplicate_ignored
+        mockMvc.perform(post("/api/webhooks/paypal")
+                        .header("PAYPAL-TRANSMISSION-ID", "valid-tx-456")
+                        .header("PAYPAL-TRANSMISSION-SIG", "valid-sig")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"id\":\"WH-VALID-1\",\"event_type\":\"PAYMENT.CAPTURE.COMPLETED\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("duplicate_ignored"));
     }
@@ -630,6 +641,25 @@ class ChatEscrowApplicationTests {
 
         mockMvc.perform(post("/api/submissions/sub-fake-123/evaluate"))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("Contract edit invalidates existing approvals")
+    void contractEditInvalidatesApprovals() {
+        Project project = projectService.createProject("Contract Invalidation Test", "Desc", "Client", null, "Dev", null, new BigDecimal("1000"), "USD");
+        ContractVersion draft = contractService.saveDraft(project.getId(), "{\"milestones\":[]}");
+
+        // Client approves v1
+        contractService.approveVersion(draft.getId(), "client");
+        ContractVersion approvedClient = contractService.getVersion(draft.getId());
+        assertEquals(ContractVersion.ApprovalStatus.APPROVED, approvedClient.getClientApprovalStatus());
+
+        // Any edit to the draft must reset client and freelancer approvals back to PENDING
+        ContractVersion edited = contractService.saveDraft(project.getId(), draft.getId(), "{\"milestones\":[{\"title\":\"New Task\"}]}");
+        assertEquals(ContractVersion.ApprovalStatus.PENDING, edited.getClientApprovalStatus());
+        assertEquals(ContractVersion.ApprovalStatus.PENDING, edited.getFreelancerApprovalStatus());
+        assertNull(edited.getClientApprovedAt());
+        assertNull(edited.getFreelancerApprovedAt());
     }
 }
 

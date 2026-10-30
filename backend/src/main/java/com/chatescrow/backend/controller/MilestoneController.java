@@ -40,7 +40,9 @@ public class MilestoneController {
     }
 
     @GetMapping("/milestones/{milestoneId}")
-    public Milestone getMilestone(@PathVariable String milestoneId) {
+    public Milestone getMilestone(@PathVariable String milestoneId, HttpServletRequest request) {
+        securityService.requireParticipant(request);
+        securityService.verifyProjectAccess(request, getProjectForMilestone(milestoneId));
         return milestoneService.getMilestone(milestoneId);
     }
 
@@ -61,7 +63,9 @@ public class MilestoneController {
     }
 
     @GetMapping("/milestones/{milestoneId}/submissions")
-    public List<Submission> getSubmissions(@PathVariable String milestoneId) {
+    public List<Submission> getSubmissions(@PathVariable String milestoneId, HttpServletRequest request) {
+        securityService.requireParticipant(request);
+        securityService.verifyProjectAccess(request, getProjectForMilestone(milestoneId));
         return milestoneService.getSubmissions(milestoneId);
     }
 
@@ -75,7 +79,10 @@ public class MilestoneController {
     }
 
     @GetMapping("/submissions/{submissionId}/reports")
-    public List<AcceptanceReport> getReports(@PathVariable String submissionId) {
+    public List<AcceptanceReport> getReports(@PathVariable String submissionId, HttpServletRequest request) {
+        securityService.requireParticipant(request);
+        Submission sub = milestoneService.getSubmission(submissionId);
+        securityService.verifyProjectAccess(request, getProjectForMilestone(sub.getMilestoneId()));
         return milestoneService.getReports(submissionId);
     }
 
@@ -129,7 +136,10 @@ public class MilestoneController {
     }
 
     @GetMapping("/milestones/{milestoneId}/dispute-pack")
-    public ResponseEntity<Map<String, Object>> getDisputePack(@PathVariable String milestoneId) {
+    public ResponseEntity<Map<String, Object>> getDisputePack(@PathVariable String milestoneId,
+                                                              HttpServletRequest request) {
+        securityService.requireParticipant(request);
+        securityService.verifyProjectAccess(request, getProjectForMilestone(milestoneId));
         return ResponseEntity.ok(milestoneService.getDisputePack(milestoneId));
     }
 }

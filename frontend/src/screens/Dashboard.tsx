@@ -59,7 +59,7 @@ export function Dashboard({ navigate, projectId }: { navigate: (s: Screen) => vo
             </p>
             <p className="mt-5 max-w-lg text-sm leading-7 text-white/55 md:text-base">
               {isClient
-                ? "AI contract extraction · Mutual approval · Milestone escrow · Evidence-based acceptance gate"
+                ? "AI contract extraction · Mutual approval · Milestone payment protection · Evidence-based acceptance gate"
                 : "Structured milestones · Evidence submission · AI-assisted review · Protected payout release"}
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
@@ -113,7 +113,7 @@ export function Dashboard({ navigate, projectId }: { navigate: (s: Screen) => vo
             tone="green"
           />
           <StatCard
-            label="Escrow protection"
+            label="Payment protection"
             value="Mutual Consent"
             detail="Funds release only upon your approval"
             icon="shield"
@@ -149,7 +149,7 @@ export function Dashboard({ navigate, projectId }: { navigate: (s: Screen) => vo
           <StatCard
             label="Payment protection"
             value="Fully protected"
-            detail="Funds held in escrow until your work is approved"
+            detail="Funds secured in milestone ledger until your work is approved"
             icon="shield"
             tone="navy"
           />
@@ -187,7 +187,7 @@ export function Dashboard({ navigate, projectId }: { navigate: (s: Screen) => vo
               </div>
               <div className="sm:text-right">
                 <p className="font-extrabold text-ink">{formatMoney(totalBudget)}</p>
-                <p className="text-xs text-muted">{isClient ? "Total escrow budget" : "Your project total"}</p>
+                <p className="text-xs text-muted">{isClient ? "Total milestone budget" : "Your project total"}</p>
               </div>
             </div>
             <div className="mt-4">

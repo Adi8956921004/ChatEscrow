@@ -57,6 +57,15 @@ public class WebhookController {
             status = verified ? WebhookEvent.VerificationStatus.VERIFIED : WebhookEvent.VerificationStatus.FAILED;
         }
 
+        // If signature verification explicitly failed, reject immediately (do not store or process forged event)
+        if (status == WebhookEvent.VerificationStatus.FAILED) {
+            log.warn("Webhook signature verification FAILED for transmissionId={} — request rejected", transmissionId);
+            return ResponseEntity.badRequest().body(Map.of(
+                    "status", "rejected",
+                    "reason", "signature_verification_failed"
+            ));
+        }
+
         // Step 2: Extract event metadata from payload
         String eventType = "UNKNOWN";
         String eventId = null;
@@ -74,9 +83,24 @@ public class WebhookController {
             return ResponseEntity.ok(Map.of("status", "duplicate_ignored"));
         }
 
-        String processingResult = status == WebhookEvent.VerificationStatus.VERIFIED ? "PROCESSED_VERIFIED"
-                : (status == WebhookEvent.VerificationStatus.FAILED ? "STORED_VERIFICATION_FAILED" : "STORED_UNVERIFIED");
+        // Step 4: Handle payment state updates for VERIFIED events first
+        String processingResult = "STORED_UNVERIFIED";
+        if (status == WebhookEvent.VerificationStatus.VERIFIED) {
+            log.info("Webhook event verified successfully: type={}, eventId={}", eventType, stableId);
+            if (payloadNode != null) {
+                try {
+                    handlePaymentWebhookEvent(eventType, payloadNode);
+                    processingResult = "PROCESSED_VERIFIED";
+                } catch (Exception ex) {
+                    log.error("Failed to update payment state for webhook {}: {}", stableId, ex.getMessage());
+                    processingResult = "FAILED_PROCESSING: " + ex.getMessage();
+                }
+            } else {
+                processingResult = "PROCESSED_VERIFIED_NO_PAYLOAD";
+            }
+        }
 
+        // Step 5: Persist event ID only after the work is done
         WebhookEvent event = WebhookEvent.builder()
                 .providerEventId(stableId)
                 .eventType(eventType)
@@ -88,27 +112,10 @@ public class WebhookController {
                 .build();
 
         try {
-            event = webhookRepo.saveAndFlush(event);
+            webhookRepo.saveAndFlush(event);
         } catch (DataIntegrityViolationException ex) {
             log.warn("Concurrent duplicate webhook caught by unique constraint: {}", stableId);
             return ResponseEntity.ok(Map.of("status", "duplicate_ignored"));
-        }
-
-        // Step 4: Handle payment state updates for VERIFIED events
-        if (status == WebhookEvent.VerificationStatus.VERIFIED) {
-            log.info("Webhook event verified successfully: type={}, eventId={}", eventType, stableId);
-
-            if (payloadNode != null) {
-                try {
-                    handlePaymentWebhookEvent(eventType, payloadNode);
-                } catch (Exception ex) {
-                    log.error("Failed to update payment state for webhook {}: {}", stableId, ex.getMessage());
-                }
-            }
-        } else if (status == WebhookEvent.VerificationStatus.FAILED) {
-            log.warn("Webhook signature verification FAILED: type={}, transmissionId={} — stored for audit only", eventType, transmissionId);
-        } else {
-            log.info("Webhook stored without verification (PayPal not configured): type={}, eventId={}", eventType, stableId);
         }
 
         return ResponseEntity.ok(Map.of(

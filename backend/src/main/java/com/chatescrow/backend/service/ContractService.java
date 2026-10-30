@@ -45,12 +45,12 @@ public class ContractService {
         String resolvedId = projectService.resolveProjectId(projectId);
         projectService.getProject(resolvedId);
         int nextVersion = contractRepo.findByProjectIdOrderByVersionNumberDesc(resolvedId).size() + 1;
-        String termsJson = aiService.extractContract(conversationText);
+        AiService.ContractExtractionResult extraction = aiService.extractContractDetailed(conversationText);
 
         ContractVersion cv = ContractVersion.builder()
                 .projectId(resolvedId)
                 .versionNumber(nextVersion)
-                .termsJson(termsJson)
+                .termsJson(extraction.termsJson())
                 .generatedFromConversation(true)
                 .clientApprovalStatus(ContractVersion.ApprovalStatus.PENDING)
                 .freelancerApprovalStatus(ContractVersion.ApprovalStatus.PENDING)
@@ -60,11 +60,13 @@ public class ContractService {
 
         ObjectNode meta = objectMapper.createObjectNode();
         meta.put("version", nextVersion);
-        meta.put("aiGenerated", aiService.isLastCallLive());
+        meta.put("aiGenerated", extraction.isLive());
+        meta.put("model", extraction.modelName());
         projectService.audit(resolvedId, "system", "AI",
                 "CONTRACT_DRAFT_GENERATED", "ContractVersion", cv.getId(),
                 meta.toString());
-        log.info("Generated contract draft v{} for project {}", nextVersion, resolvedId);
+        log.info("Generated contract draft v{} for project {} (aiGenerated={}, model={})",
+                nextVersion, resolvedId, extraction.isLive(), extraction.modelName());
         return cv;
     }
 
@@ -88,7 +90,8 @@ public class ContractService {
             java.util.Optional<ContractVersion> existingOpt = contractRepo.findById(draftId);
             if (existingOpt.isPresent()) {
                 ContractVersion existing = existingOpt.get();
-                if (existing.getProjectId().equals(resolvedId)) {
+                // If the version was already agreed, do not overwrite it in-place! Fall through to create a new version.
+                if (existing.getProjectId().equals(resolvedId) && !existing.isAgreed()) {
                     existing.setTermsJson(termsJson);
                     existing.setClientApprovalStatus(ContractVersion.ApprovalStatus.PENDING);
                     existing.setFreelancerApprovalStatus(ContractVersion.ApprovalStatus.PENDING);
@@ -135,6 +138,16 @@ public class ContractService {
     public ContractVersion approveVersion(String versionId, String role) {
         ContractVersion cv = contractRepo.findById(versionId)
                 .orElseThrow(() -> new ResourceNotFoundException("Contract version not found: " + versionId));
+
+        // Enforce that only the latest version can be approved
+        ContractVersion latest = getLatestVersion(cv.getProjectId());
+        if (!latest.getId().equals(versionId)) {
+            throw new IllegalStateException("Can only approve the latest contract version (v" + latest.getVersionNumber() + ")");
+        }
+
+        if (cv.isAgreed()) {
+            throw new IllegalStateException("Contract version v" + cv.getVersionNumber() + " is already mutually agreed.");
+        }
 
         if ("client".equalsIgnoreCase(role)) {
             cv.setClientApprovalStatus(ContractVersion.ApprovalStatus.APPROVED);

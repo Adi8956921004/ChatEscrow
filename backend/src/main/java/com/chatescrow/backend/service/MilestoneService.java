@@ -90,31 +90,26 @@ public class MilestoneService {
                 .orElseThrow(() -> new ResourceNotFoundException("Submission not found: " + submissionId));
         Milestone m = getMilestone(sub.getMilestoneId());
 
-        String reportJson = aiService.evaluateSubmission(
+        AiService.AcceptanceEvaluationResult evalResult = aiService.evaluateSubmissionDetailed(
                 m.getAcceptanceCriteria(),
                 sub.getDescription(),
                 sub.getEvidenceLinks());
 
-        boolean isLive = aiService.isLastCallLive();
-        String modelName = isLive
-                ? (aiService.getModel() + " (live)")
-                : (aiService.isConfigured() ? "demo-mode (AI fallback)" : "demo-mode (AI key not configured)");
-
         AcceptanceReport report = AcceptanceReport.builder()
                 .submissionId(submissionId)
-                .criterionResultsJson(reportJson)
+                .criterionResultsJson(evalResult.reportJson())
                 .evidenceSummary("Evaluation against agreed milestone acceptance criteria")
                 .overallSummary("AI Advisory Report for milestone: " + m.getTitle())
-                .modelName(modelName)
-                .aiGenerated(isLive)
+                .modelName(evalResult.modelName())
+                .aiGenerated(evalResult.isLive())
                 .createdAt(Instant.now())
                 .build();
         report = reportRepo.save(report);
 
         ObjectNode meta = objectMapper.createObjectNode();
         meta.put("submissionId", submissionId);
-        meta.put("aiGenerated", isLive);
-        meta.put("model", modelName);
+        meta.put("aiGenerated", evalResult.isLive());
+        meta.put("model", evalResult.modelName());
 
         projectService.audit(m.getProjectId(), "system", "AI",
                 "AI_ACCEPTANCE_REPORT_GENERATED", "AcceptanceReport", report.getId(), meta.toString());
@@ -230,6 +225,15 @@ public class MilestoneService {
 
         if (capturedPayments.isEmpty()) {
             throw new IllegalStateException("Cannot release milestone: no captured payment found for milestone " + milestoneId + ". Fund the milestone via PayPal before releasing.");
+        }
+
+        BigDecimal capturedTotal = capturedPayments.stream()
+                .map(p -> p.getAmount() != null ? p.getAmount() : BigDecimal.ZERO)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+
+        if (m.getAmount() != null && capturedTotal.compareTo(m.getAmount()) < 0) {
+            throw new IllegalStateException("Cannot release milestone: captured payment total (" + capturedTotal +
+                    ") is less than milestone amount (" + m.getAmount() + ").");
         }
 
         // Check if funded via DEMO_ESCROW

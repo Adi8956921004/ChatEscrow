@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from "react"
+import { useState, useEffect } from "react"
 import type { Screen, Payment, Milestone, Project } from "../types"
 import {
   getProjectPayments,
@@ -29,7 +29,6 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
   const [orderResult, setOrderResult] = useState<Record<string, unknown> | null>(null)
   const [captureResult, setCaptureResult] = useState<Record<string, unknown> | null>(null)
   const [demoDepositSuccess, setDemoDepositSuccess] = useState<string | null>(null)
-  const [manualOrderId, setManualOrderId] = useState("")
   const [error, setError] = useState<string | null>(null)
 
   const reloadData = () => {
@@ -161,6 +160,7 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
             </Badge>
             <Badge tone="green"><Icon name="shield" size="sm" /> Demo Simulation Mode</Badge>
             <Badge tone="blue">PayPal Sandbox Mode</Badge>
+            <Badge tone="amber">Sandbox, Not Regulated Escrow</Badge>
           </div>
           <Heading>{isClient ? "Milestone Funding & Checkout" : "Payment Status & Ledger"}</Heading>
           <p className="mt-1 text-sm text-muted">
@@ -175,7 +175,7 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
       {/* Balance Overview Cards */}
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard
-          label={isClient ? "Total Funds Secured in Escrow" : "Total Funds in Escrow for You"}
+          label={isClient ? "Total Funds in Milestone Ledger" : "Total Milestone Funds for You"}
           value={formatMoney(totalCaptured)}
           detail={isClient ? "Funds recorded in the neutral milestone ledger" : "Protected until your milestones are approved"}
           icon="shield"
@@ -340,29 +340,6 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
                 <p className="text-xs text-muted">The order is in an unexpected state. No funds have been verified. Check PayPal Sandbox dashboard.</p>
               </div>
             )}
-
-            {/* Manual Order Capture */}
-            <div className="border-t border-line pt-3">
-              <span className="text-xs font-bold text-muted block mb-1">Manual Order Capture:</span>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Enter PayPal Order ID..."
-                  value={manualOrderId}
-                  onChange={(e) => setManualOrderId(e.target.value)}
-                  className="field text-xs font-mono"
-                />
-                <Button
-                  variant="secondary"
-                  disabled={!manualOrderId.trim()}
-                  loading={capturing}
-                  onClick={() => handleCaptureOrder(manualOrderId.trim())}
-                  className="text-xs"
-                >
-                  Capture
-                </Button>
-              </div>
-            </div>
           </div>
         </Card>
       </div>}
@@ -377,7 +354,7 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
             <div>
               <p className="font-bold text-ink">Your payments are fully protected</p>
               <p className="mt-1 text-xs text-muted">
-                The client funds milestones into escrow before work begins. Once you submit your deliverables and the client approves,
+                The client funds milestones into the protected payment ledger before work begins. Once you submit your deliverables and the client approves,
                 the payout is released directly to your account. You can track all payment activity in the ledger below.
               </p>
             </div>
@@ -389,8 +366,11 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
       <Card className="overflow-hidden">
         <div className="flex items-center justify-between border-b border-line p-5 md:p-6">
           <div>
-            <Heading level={2}>Milestone Payment Ledger</Heading>
-            <p className="mt-1 text-xs text-muted">Server-verified transactions ensuring buyer and seller protection.</p>
+            <div className="flex items-center gap-2">
+              <Heading level={2}>Milestone Payment Ledger</Heading>
+              <Badge tone="amber">Sandbox simulation — not a regulated escrow</Badge>
+            </div>
+            <p className="mt-1 text-xs text-muted">Server-verified milestone transactions (Sandbox simulation — not a regulated escrow service).</p>
           </div>
           <Badge tone="green">{payments.length} Records</Badge>
         </div>

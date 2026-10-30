@@ -107,13 +107,44 @@ PAYPAL_ENABLE_PAYOUTS=false
 
 # Frontend public config
 VITE_API_BASE_URL=http://localhost:8080
+VITE_PAYPAL_CLIENT_ID=your-sandbox-client-id
 ```
 
-*Note: If `AI_API_KEY` or `PAYPAL_CLIENT_ID` are not configured, ChatEscrow operates in guided Demo Mode, displaying real schemas and simulated evaluations without crashing.*
+*Note: `VITE_PAYPAL_CLIENT_ID` is used by the frontend to render the PayPal Sandbox checkout buttons. If `AI_API_KEY` or `PAYPAL_CLIENT_ID` are not configured, ChatEscrow operates in guided Demo Mode, displaying real schemas, simulated evaluations, and 1-Click Demo Ledger deposits without crashing.*
 
 ---
 
-## 6. End-to-End User Journey
+## 6. 2-Minute Demo Script for Evaluators
+
+1. **Start the app:** Ensure backend (`mvn spring-boot:run`) on `http://localhost:8080` and frontend (`npm run dev`) on `http://localhost:5173` are running.
+2. **Observe Role Dashboards (30s):**
+   - In the top bar, toggle between **Client (Sarah)** and **Freelancer (Alex)**.
+   - Notice that the **Client Dashboard** shows action items for funding and reviewing, while the **Freelancer Dashboard** focuses on task deliverables and upcoming milestones. The sidebar navigation filters out builder and funding options for the freelancer.
+3. **Fund a Milestone into Escrow (30s):**
+   - As **Client**, click **Milestone Funding & Checkout** in the sidebar.
+   - Use the **1-Click Demo Milestone Deposit** (or real PayPal Sandbox checkout) to record verified milestone funds into the ledger.
+   - Switch to **Freelancer** view: note that funding controls are hidden; the freelancer sees protected payment records and ledger entries.
+4. **Submit Work & Run AI Acceptance Gate (40s):**
+   - As **Freelancer**, navigate to **AI Work Review**.
+   - Fill in deliverable descriptions and proof links (or click quick presets) and click **Submit Evidence for Review**.
+   - Click **Run AI Review**. Observe the structured AI Acceptance Report assessing submitted work against each agreed milestone acceptance criterion with Met/Partially Met/Not Met status and confidence ratings.
+5. **Client Decision & Payout Release (20s):**
+   - Switch role to **Client (Sarah)** on the **AI Work Review** page.
+   - Review the AI findings, add optional notes, and click **Accept Milestone**.
+   - Click **Authorize Payout Release** to release the verified funds to the freelancer's registered email.
+   - Click **Export Evidence & Dispute Pack** to preview the complete tamper-evident audit package.
+
+---
+
+## 7. Known Limitations
+
+- **Simulated Payouts Default:** PayPal Payouts API requires a verified business account with Payouts permissions enabled by PayPal. By default, `PAYPAL_ENABLE_PAYOUTS=false`, and payout authorizations produce transparently marked `DEMO_SIMULATED` payout records.
+- **In-Memory H2 Database:** The prototype uses an in-memory H2 database (`jdbc:h2:mem:chatescrow`) that re-seeds on server restart. In production, configure PostgreSQL or MySQL via Spring datasource properties.
+- **Demonstration Tokens:** Role-based access control uses static demo Bearer tokens (`client-demo-token` and `freelancer-demo-token`) allowing judges to easily switch personas in a single browser window. In production, integrate OAuth 2.0 / JWT session authentication.
+
+---
+
+## 8. End-to-End User Journey
 
 1. **Dashboard:** View active projects, overall progress, milestone payment ledger, and recent activities.
 2. **Contract Builder:** Paste raw client–freelancer conversations. The AI extracts deliverables, milestones, deadlines, and assumptions, flagging incomplete items for human review.
@@ -128,10 +159,16 @@ VITE_API_BASE_URL=http://localhost:8080
 
 ---
 
-## 7. Running Tests
+## 9. Running Tests
 
 To run the automated backend test suite covering the entire user journey:
 ```powershell
 cd backend
 mvn test
+```
+
+To run the automated end-to-end browser test with real unseen data:
+```powershell
+cd frontend
+node test_browser_flow.mjs
 ```

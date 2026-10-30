@@ -71,7 +71,7 @@ export function Sidebar({
         <div className="relative mt-auto overflow-hidden rounded-[1.5rem] border border-white/10 bg-white/6 p-4 backdrop-blur">
           <div className="absolute -right-5 -top-7 size-20 rounded-full border border-accent/30" />
           <div className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-white/45">
-            <Icon name="shield" size="sm" /> {isClient ? "Escrow Protection" : "Payout Protection"}
+            <Icon name="shield" size="sm" /> {isClient ? "Milestone Protection" : "Payout Protection"}
           </div>
           <p className="text-xs leading-relaxed text-white/55">
             {isClient

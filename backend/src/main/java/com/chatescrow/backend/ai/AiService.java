@@ -45,6 +45,9 @@ public class AiService {
         this.webClient = webClient;
     }
 
+    public record ContractExtractionResult(String termsJson, boolean isLive, String modelName) {}
+    public record AcceptanceEvaluationResult(String reportJson, boolean isLive, String modelName) {}
+
     private volatile boolean lastCallLive = false;
 
     public String getModel() {
@@ -59,19 +62,20 @@ public class AiService {
                 && !apiKey.equalsIgnoreCase("replace-with-your-gemini-api-key");
     }
 
+    @Deprecated
     public boolean isLastCallLive() {
         return lastCallLive;
     }
 
     /**
      * Extracts a structured contract draft from client–freelancer conversation.
-     * System instructions and untrusted conversation are strictly separated via systemInstruction.
+     * Returns a thread-safe ContractExtractionResult carrying the terms JSON, live flag, and model name.
      */
-    public String extractContract(String conversationText) {
+    public ContractExtractionResult extractContractDetailed(String conversationText) {
         if (!isConfigured()) {
             lastCallLive = false;
             log.info("AI_API_KEY not configured – extracting contract directly from conversation");
-            return parseContractFromConversation(conversationText);
+            return new ContractExtractionResult(parseContractFromConversation(conversationText), false, "demo-mode");
         }
 
         String systemPrompt = """
@@ -111,23 +115,28 @@ public class AiService {
             String rawJson = callGemini(systemPrompt, conversationText);
             String validatedJson = validateContractExtractionSchema(rawJson);
             lastCallLive = true;
-            return validatedJson;
+            return new ContractExtractionResult(validatedJson, true, getModel() + " (live)");
         } catch (Exception e) {
             lastCallLive = false;
             log.warn("Gemini call failed for contract extraction: {} – extracting from conversation text directly", e.getMessage());
-            return parseContractFromConversation(conversationText);
+            return new ContractExtractionResult(parseContractFromConversation(conversationText), false, "demo-mode (fallback)");
         }
+    }
+
+    public String extractContract(String conversationText) {
+        return extractContractDetailed(conversationText).termsJson();
     }
 
     /**
      * Evaluates a milestone submission against agreed acceptance criteria.
      * Evaluates untrusted submission content against criteria using separate systemInstruction.
+     * Returns a thread-safe AcceptanceEvaluationResult containing the report JSON, live flag, and model name.
      */
-    public String evaluateSubmission(String acceptanceCriteria, String submissionDescription, String evidenceLinks) {
+    public AcceptanceEvaluationResult evaluateSubmissionDetailed(String acceptanceCriteria, String submissionDescription, String evidenceLinks) {
         if (!isConfigured()) {
             lastCallLive = false;
             log.info("AI_API_KEY not configured – generating demo acceptance evaluation grounded in criteria");
-            return demoAcceptanceEvaluation(acceptanceCriteria);
+            return new AcceptanceEvaluationResult(demoAcceptanceEvaluation(acceptanceCriteria), false, "demo-mode (AI key not configured)");
         }
 
         String systemPrompt = """
@@ -170,12 +179,16 @@ public class AiService {
             String rawJson = callGemini(systemPrompt, userContent);
             String validatedJson = validateEvaluationSchema(rawJson, acceptanceCriteria);
             lastCallLive = true;
-            return validatedJson;
+            return new AcceptanceEvaluationResult(validatedJson, true, getModel() + " (live)");
         } catch (Exception e) {
             lastCallLive = false;
             log.warn("Gemini call failed for evaluation: {} – falling back to demo evaluation", e.getMessage());
-            return demoAcceptanceEvaluation(acceptanceCriteria);
+            return new AcceptanceEvaluationResult(demoAcceptanceEvaluation(acceptanceCriteria), false, "demo-mode (AI fallback)");
         }
+    }
+
+    public String evaluateSubmission(String acceptanceCriteria, String submissionDescription, String evidenceLinks) {
+        return evaluateSubmissionDetailed(acceptanceCriteria, submissionDescription, evidenceLinks).reportJson();
     }
 
     private String callGemini(String systemInstructionText, String userContentText) {
@@ -246,6 +259,7 @@ public class AiService {
                     .bodyValue(body.toString())
                     .retrieve()
                     .bodyToMono(String.class)
+                    .timeout(java.time.Duration.ofSeconds(6))
                     .block();
 
             JsonNode result = mapper.readTree(response);
