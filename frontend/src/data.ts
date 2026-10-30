@@ -209,6 +209,8 @@ export const approveContract = (projectId: string, versionId: string, role: "cli
 // Milestones
 export const getMilestones = (projectId: string) =>
   api<Milestone[]>(`/api/projects/${projectId}/milestones`)
+export const syncProjectMilestones = (projectId: string, body: Record<string, unknown>) =>
+  api<Project>(`/api/projects/${projectId}/sync-milestones`, { method: "POST", body: JSON.stringify(body) })
 export const createMilestone = (projectId: string, body: Record<string, unknown>) =>
   api<Milestone>(`/api/projects/${projectId}/milestones`, { method: "POST", body: JSON.stringify(body) })
 export const submitEvidence = (milestoneId: string, body: Record<string, unknown>) =>

@@ -29,3 +29,5 @@ Thumbs.db
 # Patch & review notes
 *.patch
 instruction_from_me.md
+
+scratch/

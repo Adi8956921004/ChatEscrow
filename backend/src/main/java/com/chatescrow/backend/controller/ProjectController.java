@@ -70,6 +70,15 @@ public class ProjectController {
             String reason
     ) {}
 
+    public record SyncMilestonesRequest(
+            String title,
+            String description,
+            BigDecimal totalBudget,
+            String clientName,
+            String freelancerName,
+            List<ProjectService.MilestoneSyncDto> milestones
+    ) {}
+
     // --- Projects ---
     @GetMapping("/projects")
     public List<Project> listProjects() {
@@ -173,6 +182,21 @@ public class ProjectController {
                 body.deliverables(), body.acceptanceCriteria(), body.description(), body.contractVersionId()));
     }
 
+    /**
+     * Synchronizes project details, budget, and milestones from an agreed contract.
+     */
+    @PostMapping("/projects/{projectId}/sync-milestones")
+    public ResponseEntity<Project> syncMilestones(@PathVariable String projectId,
+                                                  @RequestBody SyncMilestonesRequest body,
+                                                  HttpServletRequest request) {
+        securityService.requireParticipant(request);
+        Project project = projectService.getProject(projectId);
+        securityService.verifyProjectAccess(request, project);
+        return ResponseEntity.ok(projectService.syncProjectAndMilestones(
+                projectId, body.title(), body.description(), body.totalBudget(),
+                body.clientName(), body.freelancerName(), body.milestones()));
+    }
+
     // --- Timeline ---
     @GetMapping("/projects/{projectId}/timeline")
     public List<AuditEvent> getTimeline(@PathVariable String projectId, HttpServletRequest request) {
@@ -240,7 +264,7 @@ public class ProjectController {
     @PostMapping("/payments/demo-deposit")
     public ResponseEntity<Payment> demoDeposit(@RequestBody DemoDepositRequest body,
                                                HttpServletRequest request) {
-        securityService.requireClient(request);
+        securityService.requireParticipant(request);
         Project project = projectService.getProject(body.projectId());
         securityService.verifyProjectAccess(request, project);
         return ResponseEntity.ok(paymentService.recordDemoPayment(body.projectId(), body.milestoneId()));

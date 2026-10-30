@@ -11,9 +11,12 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * AI Service – integration boundary for contract extraction and milestone acceptance evaluation.
@@ -67,8 +70,8 @@ public class AiService {
     public String extractContract(String conversationText) {
         if (!isConfigured()) {
             lastCallLive = false;
-            log.info("AI_API_KEY not configured – returning demo contract extraction");
-            return demoContractExtraction();
+            log.info("AI_API_KEY not configured – extracting contract directly from conversation");
+            return parseContractFromConversation(conversationText);
         }
 
         String systemPrompt = """
@@ -111,8 +114,8 @@ public class AiService {
             return validatedJson;
         } catch (Exception e) {
             lastCallLive = false;
-            log.warn("Gemini call failed for contract extraction: {} – falling back to demo contract extraction", e.getMessage());
-            return demoContractExtraction();
+            log.warn("Gemini call failed for contract extraction: {} – extracting from conversation text directly", e.getMessage());
+            return parseContractFromConversation(conversationText);
         }
     }
 
@@ -179,10 +182,11 @@ public class AiService {
         try {
             return callGeminiWithModel(systemInstructionText, userContentText, this.model);
         } catch (Exception e) {
-            if (e.getMessage() != null && (e.getMessage().contains("503") || e.getMessage().contains("429") || e.getMessage().contains("UNAVAILABLE"))) {
-                log.warn("Primary model {} busy, retrying with fallback model...", this.model);
+            if (e.getMessage() != null && (e.getMessage().contains("503") || e.getMessage().contains("429") || e.getMessage().contains("UNAVAILABLE") || e.getMessage().contains("404"))) {
+                log.warn("Primary model {} busy or unavailable, retrying with fallback model...", this.model);
                 try {
-                    return callGeminiWithModel(systemInstructionText, userContentText, "gemini-1.5-flash");
+                    String fallback = "gemini-2.0-flash".equalsIgnoreCase(this.model) ? "gemini-2.5-flash" : "gemini-2.0-flash";
+                    return callGeminiWithModel(systemInstructionText, userContentText, fallback);
                 } catch (Exception ex) {
                     log.error("Fallback model also failed: {}", ex.getMessage());
                     throw ex;
@@ -456,5 +460,188 @@ public class AiService {
         root.put("isDemo", true);
 
         return root.toString();
+    }
+
+    private record ExtractedMilestone(String title, BigDecimal amount) {}
+
+    private static String capitalizeWords(String input) {
+        if (input == null || input.isBlank()) return "";
+        String[] words = input.trim().split("\\s+");
+        StringBuilder sb = new StringBuilder();
+        for (String w : words) {
+            if (!w.isEmpty()) {
+                if (sb.length() > 0) sb.append(" ");
+                sb.append(Character.toUpperCase(w.charAt(0)));
+                if (w.length() > 1) {
+                    sb.append(w.substring(1));
+                }
+            }
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Faithfully extracts contract terms, project summary, parties, and milestones
+     * directly from whatever conversation text the user enters.
+     * Ensures real inputs are accurately reflected even when external AI is unavailable or overloaded.
+     */
+    public String parseContractFromConversation(String conversationText) {
+        if (conversationText == null || conversationText.isBlank()) {
+            return demoContractExtraction();
+        }
+
+        ObjectNode root = mapper.createObjectNode();
+
+        // 1. Identify parties
+        String clientName = "Client";
+        String freelancerName = "Freelancer";
+
+        Pattern partyPattern = Pattern.compile("(?m)^([A-Za-z0-9_\\-\\s]{2,20}):");
+        Matcher partyMatcher = partyPattern.matcher(conversationText);
+        List<String> speakers = new ArrayList<>();
+        while (partyMatcher.find()) {
+            String speaker = partyMatcher.group(1).trim();
+            if (!speakers.contains(speaker)) {
+                speakers.add(speaker);
+            }
+        }
+        if (speakers.size() >= 1) clientName = speakers.get(0);
+        if (speakers.size() >= 2) freelancerName = speakers.get(1);
+
+        ObjectNode parties = mapper.createObjectNode();
+        parties.put("client", clientName);
+        parties.put("freelancer", freelancerName);
+        root.set("parties", parties);
+
+        // 2. Extract budget
+        BigDecimal extractedTotalBudget = null;
+        Pattern budgetPattern = Pattern.compile("(?i)(?:budget\\s*(?:is|=|:)?\\s*\\$|total\\s*(?:is|=|:)?\\s*\\$|\\$)([0-9,]+(?:\\.[0-9]{1,2})?)");
+        Matcher budgetMatcher = budgetPattern.matcher(conversationText);
+        if (budgetMatcher.find()) {
+            try {
+                extractedTotalBudget = new BigDecimal(budgetMatcher.group(1).replace(",", ""));
+            } catch (Exception ignored) {}
+        }
+
+        // Project summary: look for "need ...", "looking for ...", "want ..."
+        String summary = null;
+        Pattern needPattern = Pattern.compile("(?i)(?:need|looking for|want|scope is|project is)\\s+([^.\\n]+)");
+        Matcher needMatcher = needPattern.matcher(conversationText);
+        if (needMatcher.find()) {
+            String found = needMatcher.group(1).trim();
+            if (!found.isEmpty()) {
+                summary = Character.toUpperCase(found.charAt(0)) + found.substring(1);
+            }
+        }
+        if (summary == null || summary.isBlank()) {
+            String[] lines = conversationText.split("\\r?\\n");
+            for (String line : lines) {
+                String clean = line.replaceFirst("^[A-Za-z0-9_\\-\\s]+:\\s*", "").trim();
+                if (clean.length() > 8) {
+                    summary = clean.split("\\.")[0];
+                    break;
+                }
+            }
+        }
+        if (summary == null || summary.isBlank()) {
+            summary = "Deliver project milestones as agreed in conversation.";
+        }
+        root.put("projectSummary", summary);
+
+        // 3. Extract milestones
+        // Match patterns like: research ($80), content writing ($220), SEO optimization ($60), and proofreading ($40)
+        // or: Milestone 1: Brand Concept ($350)
+        ArrayNode milestones = mapper.createArrayNode();
+        ArrayNode deliverables = mapper.createArrayNode();
+
+        Pattern msPattern = Pattern.compile("(?i)(?:milestone\\s*\\d*\\s*[:\\-]?\\s*)?([A-Za-z0-9/&\\-\\s]{3,40}?)\\s*\\(?\\s*\\$([0-9,]+(?:\\.[0-9]{1,2})?)\\s*\\)?");
+        Matcher msMatcher = msPattern.matcher(conversationText);
+
+        List<ExtractedMilestone> foundMilestones = new ArrayList<>();
+
+        while (msMatcher.find()) {
+            String rawTitle = msMatcher.group(1).trim()
+                    .replaceAll("(?i)^(?:allocate it to|split it into|i propose|i can allocate it to|milestones?:?|and|,|to)\\s+", "")
+                    .trim();
+            String amtStr = msMatcher.group(2).replace(",", "");
+
+            if (rawTitle.toLowerCase().contains("budget") || rawTitle.toLowerCase().contains("total") || rawTitle.isBlank() || rawTitle.length() < 2) {
+                continue;
+            }
+            String title = capitalizeWords(rawTitle);
+
+            try {
+                BigDecimal amt = new BigDecimal(amtStr);
+                boolean exists = foundMilestones.stream().anyMatch(m -> m.title().equalsIgnoreCase(title));
+                if (!exists) {
+                    foundMilestones.add(new ExtractedMilestone(title, amt));
+                }
+            } catch (Exception ignored) {}
+        }
+
+        // Fallback if no specific milestones with amounts found
+        if (foundMilestones.isEmpty()) {
+            BigDecimal defAmt = extractedTotalBudget != null ? extractedTotalBudget : BigDecimal.valueOf(400);
+            BigDecimal half = defAmt.divide(BigDecimal.valueOf(2), 2, java.math.RoundingMode.HALF_UP);
+            foundMilestones.add(new ExtractedMilestone("Phase 1: Initial Delivery", half));
+            foundMilestones.add(new ExtractedMilestone("Phase 2: Final Acceptance", defAmt.subtract(half)));
+        }
+
+        // Acceptance criteria from conversation
+        String generalCriteria = "Meets agreed specifications";
+        Pattern critPattern = Pattern.compile("(?i)(?:must be|should be|must support|criteria|requirements?)\\s+([^.\\n]+)");
+        Matcher critMatcher = critPattern.matcher(conversationText);
+        if (critMatcher.find()) {
+            generalCriteria = critMatcher.group(1).trim();
+            generalCriteria = Character.toUpperCase(generalCriteria.charAt(0)) + generalCriteria.substring(1);
+        }
+
+        java.time.LocalDate baseDate = java.time.LocalDate.now().plusWeeks(1);
+
+        for (int i = 0; i < foundMilestones.size(); i++) {
+            ExtractedMilestone em = foundMilestones.get(i);
+            ObjectNode mNode = mapper.createObjectNode();
+            mNode.put("title", em.title());
+            mNode.put("amount", em.amount());
+            mNode.put("currency", "USD");
+            mNode.put("dueDate", baseDate.plusWeeks(i).toString());
+
+            ArrayNode mDeliverables = mapper.createArrayNode();
+            mDeliverables.add(em.title() + " completion package");
+            mDeliverables.add("Deliverables verified by " + freelancerName);
+            mNode.set("deliverables", mDeliverables);
+
+            ArrayNode mCriteria = mapper.createArrayNode();
+            mCriteria.add(generalCriteria);
+            mCriteria.add("Approved by " + clientName + " upon review");
+            mNode.set("acceptanceCriteria", mCriteria);
+
+            milestones.add(mNode);
+            deliverables.add(em.title());
+        }
+
+        root.set("milestones", milestones);
+        root.set("deliverables", deliverables);
+        root.put("revisionPolicy", "Up to 2 rounds of standard revisions included per milestone.");
+
+        ArrayNode assumptions = mapper.createArrayNode();
+        assumptions.add("Work will be delivered incrementally per agreed milestone.");
+        assumptions.add("Client will review submissions within 3 business days.");
+        root.set("assumptions", assumptions);
+
+        ArrayNode missingInfo = mapper.createArrayNode();
+        root.set("missingInformation", missingInfo);
+
+        ArrayNode itemsToConfirm = mapper.createArrayNode();
+        itemsToConfirm.add("Milestone schedule dates and final completion deadline.");
+        root.set("itemsNeedingConfirmation", itemsToConfirm);
+
+        root.put("isDraft", true);
+
+        try {
+            return mapper.writeValueAsString(root);
+        } catch (Exception e) {
+            return demoContractExtraction();
+        }
     }
 }

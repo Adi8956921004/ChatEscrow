@@ -48,7 +48,12 @@ export default function App() {
   }, [refreshKey])
 
   const navigate = (next: Screen) => {
-    setScreen(next)
+    // If freelancer tries to navigate to builder, redirect to review (their equivalent)
+    if (activeRole === "freelancer" && next === "builder") {
+      setScreen("review")
+    } else {
+      setScreen(next)
+    }
     window.scrollTo({ top: 0, behavior: "smooth" })
   }
 

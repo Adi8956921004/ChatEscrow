@@ -5,7 +5,7 @@ import {
   saveDraft,
   approveContract,
   getMilestones,
-  createMilestone,
+  syncProjectMilestones,
   formatMoney,
 } from "../data"
 import { Icon, Button, Heading, Badge, Card, Field, InfoBanner, Avatar } from "../components/ui"
@@ -20,6 +20,10 @@ interface EditableMilestone {
 }
 
 const SAMPLE_CONVERSATIONS = [
+  {
+    name: "Blog Content Writing ($400)",
+    text: "Client: We need ten blog articles for our company website within one month. Budget is $400.\nWriter: I can allocate it to research ($80), content writing ($220), SEO optimization ($60), and proofreading ($40).\nClient: Perfect. Each article should be original, informative, and optimized for our target audience.",
+  },
   {
     name: "E-commerce Website ($1,200)",
     text: "Sarah: We need a complete e-commerce site for North & Pine by end of September. Budget is $1,200.\nAlex: I can split it into design ($250), frontend ($400), backend integration ($350), and final QA ($200).\nSarah: Perfect. It must be responsive, accessible with Lighthouse > 90, and match the approved designs.",
@@ -103,16 +107,34 @@ export function Builder({
         if (Array.isArray(parsed.itemsNeedingConfirmation)) setItemsNeedingConfirmation(parsed.itemsNeedingConfirmation)
         if (Array.isArray(parsed.assumptions)) setAssumptions(parsed.assumptions)
         if (Array.isArray(parsed.milestones) && parsed.milestones.length > 0) {
-          setMilestonesList(
-            parsed.milestones.map((m: Record<string, unknown>, idx: number) => ({
-              title: String(m.title ?? `Milestone ${idx + 1}`),
-              amount: m.amount != null ? Number(m.amount) : 0,
-              currency: String(m.currency ?? "USD"),
-              dueDate: String(m.dueDate && m.dueDate !== "null" && m.dueDate !== "Needs confirmation" ? m.dueDate : "Needs confirmation"),
-              deliverables: Array.isArray(m.deliverables) ? m.deliverables : [String(m.deliverables ?? "Deliverables")],
-              acceptanceCriteria: Array.isArray(m.acceptanceCriteria) ? m.acceptanceCriteria : [String(m.acceptanceCriteria ?? "Meets acceptance criteria")],
-            }))
-          )
+          const mapped = parsed.milestones.map((m: Record<string, unknown>, idx: number) => ({
+            title: String(m.title ?? `Milestone ${idx + 1}`),
+            amount: m.amount != null ? Number(m.amount) : 0,
+            currency: String(m.currency ?? "USD"),
+            dueDate: String(m.dueDate && m.dueDate !== "null" && m.dueDate !== "Needs confirmation" ? m.dueDate : "Needs confirmation"),
+            deliverables: Array.isArray(m.deliverables) ? m.deliverables : [String(m.deliverables ?? "Deliverables")],
+            acceptanceCriteria: Array.isArray(m.acceptanceCriteria) ? m.acceptanceCriteria : [String(m.acceptanceCriteria ?? "Meets acceptance criteria")],
+          }))
+          setMilestonesList(mapped)
+
+          // Immediately sync extracted real project summary and milestones to the backend
+          const totalBudget = mapped.reduce((acc: number, m: EditableMilestone) => acc + (Number(m.amount) || 0), 0)
+          syncProjectMilestones(projectId, {
+            title: parsed.projectSummary ? String(parsed.projectSummary).slice(0, 60) : "Agreed Project",
+            description: parsed.projectSummary ? String(parsed.projectSummary) : "Milestone project",
+            totalBudget: totalBudget > 0 ? totalBudget : undefined,
+            clientName: parsed.parties?.client,
+            freelancerName: parsed.parties?.freelancer,
+            milestones: mapped.map((m: EditableMilestone, idx: number) => ({
+              title: m.title,
+              amount: Number(m.amount) || 50,
+              dueDate: m.dueDate !== "Needs confirmation" ? m.dueDate : null,
+              deliverables: Array.isArray(m.deliverables) ? m.deliverables.join("|") : m.deliverables,
+              acceptanceCriteria: Array.isArray(m.acceptanceCriteria) ? m.acceptanceCriteria.join("|") : m.acceptanceCriteria,
+              description: `Milestone: ${m.title}`,
+              status: idx === 0 ? "SUBMITTED" : "NOT_STARTED",
+            })),
+          }).then(() => onRefresh()).catch(() => {})
         }
       } catch {}
     } catch {
@@ -213,23 +235,22 @@ export function Builder({
       const isBothApproved = (role === "client" ? true : clientApproved) && (role === "freelancer" ? true : freelancerApproved)
       if (isBothApproved) {
         setAgreementSuccess(true)
-        // Sync milestones to backend project only if none exist yet
         setSavingMilestones(true)
         try {
-          const existing = await getMilestones(projectId).catch(() => [])
-          if (existing.length === 0) {
-            for (const m of milestonesList) {
-              await createMilestone(projectId, {
-                title: m.title,
-                amount: Number(m.amount),
-                dueDate: m.dueDate,
-                deliverables: Array.isArray(m.deliverables) ? m.deliverables.join("|") : m.deliverables,
-                acceptanceCriteria: Array.isArray(m.acceptanceCriteria) ? m.acceptanceCriteria.join("|") : m.acceptanceCriteria,
-                description: `Agreed milestone: ${m.title}`,
-                contractVersionId: draft?.id,
-              })
-            }
-          }
+          await syncProjectMilestones(projectId, {
+            title: projectSummary ? projectSummary.slice(0, 60) : "Agreed Project",
+            description: projectSummary,
+            totalBudget: milestonesList.reduce((acc, m) => acc + (Number(m.amount) || 0), 0),
+            milestones: milestonesList.map((m, idx) => ({
+              title: m.title,
+              amount: Number(m.amount),
+              dueDate: m.dueDate !== "Needs confirmation" ? m.dueDate : null,
+              deliverables: Array.isArray(m.deliverables) ? m.deliverables.join("|") : m.deliverables,
+              acceptanceCriteria: Array.isArray(m.acceptanceCriteria) ? m.acceptanceCriteria.join("|") : m.acceptanceCriteria,
+              description: `Agreed milestone: ${m.title}`,
+              status: idx === 0 ? "SUBMITTED" : "NOT_STARTED",
+            })),
+          })
           onRefresh()
         } catch (syncErr) {
           setError("Approved, but failed to sync milestones: " + (syncErr instanceof Error ? syncErr.message : String(syncErr)))

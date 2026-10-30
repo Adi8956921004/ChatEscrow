@@ -1,8 +1,9 @@
 import { useState, useEffect } from "react"
-import type { Screen, Milestone, ContractVersion } from "../types"
+import type { Screen, Milestone, ContractVersion, Project } from "../types"
 import {
   getMilestones,
   getContractVersions,
+  getProject,
   createMilestone,
   formatMoney,
   statusLabel,
@@ -30,11 +31,14 @@ export function Agreement({
   const [newDeliverables, setNewDeliverables] = useState("")
   const [newCriteria, setNewCriteria] = useState("")
 
+  const [project, setProject] = useState<Project | null>(null)
+
   useEffect(() => {
-    Promise.all([getMilestones(projectId), getContractVersions(projectId)])
-      .then(([ms, cvs]) => {
+    Promise.all([getMilestones(projectId), getContractVersions(projectId), getProject(projectId)])
+      .then(([ms, cvs, p]) => {
         setMilestones(ms)
         setContracts(cvs)
+        setProject(p)
         setSelected(ms.find((m) => m.status === "SUBMITTED") ?? ms[0] ?? null)
       })
       .catch((err) => setError(err instanceof Error ? err.message : "Failed to load agreement data. Check backend connectivity."))
@@ -82,8 +86,13 @@ export function Agreement({
             <Badge tone="green">Active Project</Badge>
             <Badge tone="green"><Icon name="check" size="sm" /> Terms Agreed</Badge>
           </div>
-          <Heading>E-commerce Website Development</Heading>
-          <p className="mt-2 text-sm text-muted">Sarah Miller (Client) ↔ Alex Carter (Freelancer) · Milestone Payment Protection</p>
+          <Heading>{project?.title || "Agreed Project Milestones"}</Heading>
+          <p className="mt-2 text-sm text-muted">
+            {project?.clientName || "Sarah Miller"} (Client) ↔ {project?.freelancerName || "Alex Carter"} (Freelancer) · Milestone Payment Protection
+          </p>
+          {project?.description && (
+            <p className="mt-1 text-xs text-muted max-w-2xl">{project.description}</p>
+          )}
         </div>
         <div className="flex gap-3">
           <Button variant="secondary" icon="plus" onClick={() => setShowAddModal(true)}>+ Add Milestone</Button>

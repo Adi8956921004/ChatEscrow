@@ -1,20 +1,25 @@
-import { useState, useEffect } from "react"
-import type { Screen, Payment, Milestone } from "../types"
+﻿import { useState, useEffect } from "react"
+import type { Screen, Payment, Milestone, Project } from "../types"
 import {
   getProjectPayments,
   getMilestones,
+  getProject,
   depositDemoPayment,
   createPaypalOrder,
   capturePaypalOrder,
   recheckPaypalOrder,
   formatMoney,
   paymentStatusLabel,
+  getActorRole,
 } from "../data"
 import { Icon, Button, Heading, Badge, Card, Field, InfoBanner, StatCard } from "../components/ui"
 
 export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s: Screen) => void; projectId: string }) {
+  const activeRole = getActorRole()
+  const isClient = activeRole === "client"
   const [payments, setPayments] = useState<Payment[]>([])
   const [milestones, setMilestones] = useState<Milestone[]>([])
+  const [project, setProject] = useState<Project | null>(null)
   const [selectedMilestoneId, setSelectedMilestoneId] = useState("")
   const [amount, setAmount] = useState("")
   const [loadingPaypal, setLoadingPaypal] = useState(false)
@@ -40,6 +45,7 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
     }).catch((err) => {
       setError("Failed to load milestones: " + (err instanceof Error ? err.message : String(err)))
     })
+    getProject(projectId).then(setProject).catch(() => {})
   }
 
   useEffect(() => {
@@ -123,7 +129,7 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
       }
       reloadData()
     } catch (e) {
-      // api() throws on non-2xx — surface the real HTTP error body
+      // api() throws on non-2xx â€” surface the real HTTP error body
       setError(
         "Capture failed: " + (e instanceof Error ? e.message : String(e))
       )
@@ -149,13 +155,18 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
     <div className="mx-auto max-w-5xl space-y-6">
       <div className="page-masthead flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
         <div>
-          <div className="flex items-center gap-2 mb-2">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            <Badge tone={isClient ? "green" : "blue"}>
+              {isClient ? "👤 Client View" : "🛠️ Freelancer View"}
+            </Badge>
             <Badge tone="green"><Icon name="shield" size="sm" /> Demo Simulation Mode</Badge>
             <Badge tone="blue">PayPal Sandbox Mode</Badge>
           </div>
-          <Heading>Milestone Funding & Checkout</Heading>
+          <Heading>{isClient ? "Milestone Funding & Checkout" : "Payment Status & Ledger"}</Heading>
           <p className="mt-1 text-sm text-muted">
-            Secure milestone funds safely in the payment ledger. You can use <strong>1-Click Demo Deposit</strong> (simulation mode) or <strong>PayPal Sandbox</strong>.
+            {isClient
+              ? <>Secure milestone funds safely in the payment ledger. Use <strong>1-Click Demo Deposit</strong> or <strong>PayPal Sandbox</strong>.</>
+              : "View the payment ledger for your project. Funds are released to you when the client approves each milestone."}
           </p>
         </div>
         <Button variant="secondary" icon="refresh" onClick={reloadData}>Refresh Ledger</Button>
@@ -164,15 +175,15 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
       {/* Balance Overview Cards */}
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard
-          label="Total Milestone Funds Secured"
+          label={isClient ? "Total Funds Secured in Escrow" : "Total Funds in Escrow for You"}
           value={formatMoney(totalCaptured)}
-          detail="Funds recorded in neutral milestone ledger"
+          detail={isClient ? "Funds recorded in the neutral milestone ledger" : "Protected until your milestones are approved"}
           icon="shield"
           tone="green"
         />
         <StatCard
-          label="Project Target"
-          value="$1,200"
+          label="Project Total"
+          value={formatMoney(project?.totalBudget ?? milestones.reduce((acc, m) => acc + (Number(m.amount) || 0), 0))}
           detail="Agreed total across all milestones"
           icon="trend"
           tone="blue"
@@ -180,7 +191,7 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
         <StatCard
           label="Protection Status"
           value="Mutual Consent"
-          detail="Never releases without client acceptance"
+          detail={isClient ? "Funds never release without your approval" : "Payout guaranteed upon client approval"}
           icon="wallet"
           tone="amber"
         />
@@ -194,7 +205,8 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
         </InfoBanner>
       )}
 
-      <div className="grid gap-6 md:grid-cols-2">
+      {/* Funding forms — Client only */}
+      {isClient && <div className="grid gap-6 md:grid-cols-2">
         {/* Card 1: 1-Click Demo Milestone Deposit */}
         <Card className="p-5 md:p-6 border-success-border bg-gradient-to-b from-success-soft/20 to-transparent">
           <div className="flex items-center justify-between border-b border-line pb-3">
@@ -221,7 +233,7 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
                   <option value="demo-milestone-frontend">Frontend Development ($400)</option>
                 ) : milestones.map((m) => (
                   <option key={m.id} value={m.id}>
-                    {m.title} – {formatMoney(m.amount)} USD
+                    {m.title} â€“ {formatMoney(m.amount)} USD
                   </option>
                 ))}
               </select>
@@ -279,7 +291,7 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
 
             {orderResult && (
               <div className="rounded-xl border border-line bg-surface p-4 space-y-3">
-                <p className="text-xs font-bold text-ink">Order Created: <span className="font-mono">{String(orderResult.orderId ?? "—")}</span></p>
+                <p className="text-xs font-bold text-ink">Order Created: <span className="font-mono">{String(orderResult.orderId ?? "â€”")}</span></p>
                 <div className="flex flex-col gap-2">
                   {Boolean(orderResult.approveUrl) && String(orderResult.approveUrl).startsWith("https") && (
                     <a
@@ -353,7 +365,25 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
             </div>
           </div>
         </Card>
-      </div>
+      </div>}
+
+      {/* Freelancer: informational banner about payments */}
+      {!isClient && (
+        <Card className="overflow-hidden border border-blue-200 bg-blue-50/30 p-5">
+          <div className="flex items-center gap-3">
+            <span className="grid size-10 shrink-0 place-items-center rounded-2xl bg-blue-100 text-blue-600">
+              <Icon name="shield" />
+            </span>
+            <div>
+              <p className="font-bold text-ink">Your payments are fully protected</p>
+              <p className="mt-1 text-xs text-muted">
+                The client funds milestones into escrow before work begins. Once you submit your deliverables and the client approves,
+                the payout is released directly to your account. You can track all payment activity in the ledger below.
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Milestone Payment Ledger Table */}
       <Card className="overflow-hidden">
@@ -381,8 +411,8 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
                   </Badge>
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-3 text-xs text-muted font-mono">
-                  {p.providerOrderId && <span>Order: {p.providerOrderId.substring(0, 18)}…</span>}
-                  {p.providerCaptureId && <span>Capture: {p.providerCaptureId.substring(0, 18)}…</span>}
+                  {p.providerOrderId && <span>Order: {p.providerOrderId.substring(0, 18)}â€¦</span>}
+                  {p.providerCaptureId && <span>Capture: {p.providerCaptureId.substring(0, 18)}â€¦</span>}
                   {p.verifiedAt && <span className="text-success font-sans">Verified {new Date(p.verifiedAt).toLocaleTimeString()}</span>}
                 </div>
               </div>
@@ -417,7 +447,7 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
                         } else {
                           setError(
                             `Re-check result: ${String(result.status)}.` +
-                            (result.mismatch ? " Amount/currency mismatch — check PayPal Sandbox dashboard to reconcile." : " Status still unresolved.")
+                            (result.mismatch ? " Amount/currency mismatch â€” check PayPal Sandbox dashboard to reconcile." : " Status still unresolved.")
                           )
                         }
                       } catch (e) {

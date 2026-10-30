@@ -14,6 +14,11 @@ export function Topbar({
   onSelectRole: (r: Role) => void
 }) {
   const title = navItems.find((item) => item.id === screen)?.label
+    ?? (screen === "payment" && activeRole === "freelancer" ? "Payment Status & Ledger" : undefined)
+    ?? screen
+
+  const isClient = activeRole === "client"
+
   return (
     <header className="sticky top-0 z-20 flex h-16 items-center justify-between bg-page/80 px-4 backdrop-blur-xl md:px-8">
       <div className="flex items-center gap-3">
@@ -27,22 +32,25 @@ export function Topbar({
         <button
           type="button"
           onClick={() => onSelectRole("client")}
-          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition ${activeRole === "client" ? "bg-primary text-white shadow-sm" : "text-muted hover:text-ink hover:bg-surface-strong"}`}
+          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition ${isClient ? "bg-primary text-white shadow-sm" : "text-muted hover:text-ink hover:bg-surface-strong"}`}
         >
-          <span className={`size-2 rounded-full ${activeRole === "client" ? "bg-white" : "bg-emerald-400"}`} />
+          <span className={`size-2 rounded-full ${isClient ? "bg-white" : "bg-emerald-400"}`} />
           Client (Sarah)
         </button>
         <button
           type="button"
           onClick={() => onSelectRole("freelancer")}
-          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition ${activeRole === "freelancer" ? "bg-primary text-white shadow-sm" : "text-muted hover:text-ink hover:bg-surface-strong"}`}
+          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition ${!isClient ? "bg-primary text-white shadow-sm" : "text-muted hover:text-ink hover:bg-surface-strong"}`}
         >
-          <span className={`size-2 rounded-full ${activeRole === "freelancer" ? "bg-white" : "bg-violet-400"}`} />
+          <span className={`size-2 rounded-full ${!isClient ? "bg-white" : "bg-violet-400"}`} />
           Freelancer (Alex)
         </button>
       </div>
 
       <div className="ml-auto flex items-center gap-2">
+        <Badge tone={isClient ? "green" : "blue"}>
+          {isClient ? "👤 Client" : "🛠️ Freelancer"}
+        </Badge>
         <Badge tone="blue">PayPal Sandbox</Badge>
         <button className="relative rounded-xl p-2.5 text-muted hover:bg-surface" aria-label="Notifications">
           <Icon name="bell" />
