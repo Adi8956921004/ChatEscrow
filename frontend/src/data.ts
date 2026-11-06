@@ -31,6 +31,7 @@ export type PaymentStatus =
   | "CAPTURED"
   | "FAILED"
   | "CANCELLED"
+  | "REFUNDED"
   | "UNKNOWN"
 
 export type ApprovalStatus = "PENDING" | "APPROVED" | "REJECTED"
@@ -302,6 +303,7 @@ export const paymentStatusLabel: Record<PaymentStatus, string> = {
   CAPTURED: "Captured (verified)",
   FAILED: "Failed",
   CANCELLED: "Cancelled",
+  REFUNDED: "Refunded",
   UNKNOWN: "Unknown (reconcile)",
 }
 

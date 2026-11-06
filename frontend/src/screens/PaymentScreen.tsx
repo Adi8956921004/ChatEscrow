@@ -143,6 +143,7 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
     if (status === "CAPTURED") return "green"
     if (status === "APPROVAL_PENDING") return "blue"
     if (status === "FAILED") return "red"
+    if (status === "REFUNDED") return "amber"
     if (status === "UNKNOWN") return "amber"
     return "gray"
   }
