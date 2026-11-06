@@ -184,6 +184,7 @@ public class ProjectController {
 
     /**
      * Synchronizes project details, budget, and milestones from an agreed contract.
+     * Enforces that the latest contract version must be mutually agreed by both parties first.
      */
     @PostMapping("/projects/{projectId}/sync-milestones")
     public ResponseEntity<Project> syncMilestones(@PathVariable String projectId,
@@ -192,6 +193,12 @@ public class ProjectController {
         securityService.requireParticipant(request);
         Project project = projectService.getProject(projectId);
         securityService.verifyProjectAccess(request, project);
+
+        ContractVersion latest = contractService.getLatestVersion(projectId);
+        if (latest == null || !latest.isAgreed()) {
+            throw new IllegalStateException("Cannot synchronize milestones: contract must be mutually approved by both parties first.");
+        }
+
         return ResponseEntity.ok(projectService.syncProjectAndMilestones(
                 projectId, body.title(), body.description(), body.totalBudget(),
                 body.clientName(), body.freelancerName(), body.milestones()));

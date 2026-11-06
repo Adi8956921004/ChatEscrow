@@ -121,8 +121,7 @@ public class ProjectService {
                 }
             }
 
-            // Create the new milestones
-            boolean isFirst = true;
+            // Create the new agreed milestones in NOT_STARTED state (never fabricate submissions)
             for (MilestoneSyncDto dto : newMilestones) {
                 if (dto.title() == null || dto.title().isBlank()) continue;
                 BigDecimal amt = dto.amount() != null && dto.amount().compareTo(BigDecimal.ZERO) > 0
@@ -135,16 +134,6 @@ public class ProjectService {
                     } catch (Exception ignored) {}
                 }
 
-                Milestone.MilestoneStatus initialStatus = Milestone.MilestoneStatus.NOT_STARTED;
-                if (dto.status() != null && !dto.status().isBlank()) {
-                    try {
-                        initialStatus = Milestone.MilestoneStatus.valueOf(dto.status().trim().toUpperCase());
-                    } catch (Exception ignored) {}
-                } else if (isFirst) {
-                    // Start first milestone in SUBMITTED so user can immediately test review and evaluation workflow!
-                    initialStatus = Milestone.MilestoneStatus.SUBMITTED;
-                }
-
                 Milestone m = Milestone.builder()
                         .projectId(resolvedId)
                         .title(dto.title().trim())
@@ -154,25 +143,11 @@ public class ProjectService {
                         .deliverables(dto.deliverables() != null ? dto.deliverables() : dto.title() + " completion package")
                         .acceptanceCriteria(dto.acceptanceCriteria() != null ? dto.acceptanceCriteria() : "Approved by client upon review")
                         .description(dto.description() != null ? dto.description() : "Agreed milestone: " + dto.title())
-                        .status(initialStatus)
+                        .status(Milestone.MilestoneStatus.NOT_STARTED)
                         .createdAt(Instant.now())
                         .updatedAt(Instant.now())
                         .build();
-                m = milestoneRepo.save(m);
-
-                // If marked SUBMITTED, create an initial submission so Review screen has real evidence to evaluate
-                if (initialStatus == Milestone.MilestoneStatus.SUBMITTED) {
-                    submissionRepo.save(Submission.builder()
-                            .milestoneId(m.getId())
-                            .submittedBy(project.getFreelancerName())
-                            .description("Completed deliverable package for " + m.getTitle() + " adhering to all agreed specifications.")
-                            .evidenceLinks("https://github.com/example/" + resolvedId.substring(0, 8) + "/" + m.getTitle().toLowerCase().replaceAll("\\s+", "-"))
-                            .fileReferences("deliverable_v1_final.zip")
-                            .createdAt(Instant.now())
-                            .build());
-                }
-
-                isFirst = false;
+                milestoneRepo.save(m);
             }
         }
 

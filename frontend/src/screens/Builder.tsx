@@ -116,25 +116,6 @@ export function Builder({
             acceptanceCriteria: Array.isArray(m.acceptanceCriteria) ? m.acceptanceCriteria : [String(m.acceptanceCriteria ?? "Meets acceptance criteria")],
           }))
           setMilestonesList(mapped)
-
-          // Immediately sync extracted real project summary and milestones to the backend
-          const totalBudget = mapped.reduce((acc: number, m: EditableMilestone) => acc + (Number(m.amount) || 0), 0)
-          syncProjectMilestones(projectId, {
-            title: parsed.projectSummary ? String(parsed.projectSummary).slice(0, 60) : "Agreed Project",
-            description: parsed.projectSummary ? String(parsed.projectSummary) : "Milestone project",
-            totalBudget: totalBudget > 0 ? totalBudget : undefined,
-            clientName: parsed.parties?.client,
-            freelancerName: parsed.parties?.freelancer,
-            milestones: mapped.map((m: EditableMilestone, idx: number) => ({
-              title: m.title,
-              amount: Number(m.amount) || 50,
-              dueDate: m.dueDate !== "Needs confirmation" ? m.dueDate : null,
-              deliverables: Array.isArray(m.deliverables) ? m.deliverables.join("|") : m.deliverables,
-              acceptanceCriteria: Array.isArray(m.acceptanceCriteria) ? m.acceptanceCriteria.join("|") : m.acceptanceCriteria,
-              description: `Milestone: ${m.title}`,
-              status: idx === 0 ? "SUBMITTED" : "NOT_STARTED",
-            })),
-          }).then(() => onRefresh()).catch(() => {})
         }
       } catch {}
     } catch {
@@ -229,10 +210,12 @@ export function Builder({
       if (draft && draft.id && !draft.id.startsWith("draft-")) {
         await approveContract(projectId, draft.id, role)
       }
+      const updatedClientApproved = role === "client" ? true : clientApproved
+      const updatedFreelancerApproved = role === "freelancer" ? true : freelancerApproved
       if (role === "client") setClientApproved(true)
       else setFreelancerApproved(true)
 
-      const isBothApproved = (role === "client" ? true : clientApproved) && (role === "freelancer" ? true : freelancerApproved)
+      const isBothApproved = updatedClientApproved && updatedFreelancerApproved
       if (isBothApproved) {
         setAgreementSuccess(true)
         setSavingMilestones(true)
@@ -241,14 +224,14 @@ export function Builder({
             title: projectSummary ? projectSummary.slice(0, 60) : "Agreed Project",
             description: projectSummary,
             totalBudget: milestonesList.reduce((acc, m) => acc + (Number(m.amount) || 0), 0),
-            milestones: milestonesList.map((m, idx) => ({
+            milestones: milestonesList.map((m) => ({
               title: m.title,
               amount: Number(m.amount),
               dueDate: m.dueDate !== "Needs confirmation" ? m.dueDate : null,
               deliverables: Array.isArray(m.deliverables) ? m.deliverables.join("|") : m.deliverables,
               acceptanceCriteria: Array.isArray(m.acceptanceCriteria) ? m.acceptanceCriteria.join("|") : m.acceptanceCriteria,
               description: `Agreed milestone: ${m.title}`,
-              status: idx === 0 ? "SUBMITTED" : "NOT_STARTED",
+              status: "NOT_STARTED",
             })),
           })
           onRefresh()

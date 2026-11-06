@@ -68,6 +68,9 @@ class ChatEscrowApplicationTests {
     private AuditEventRepository auditEventRepository;
 
     @Autowired
+    private SubmissionRepository submissionRepository;
+
+    @Autowired
     private AiService aiService;
 
     @MockBean
@@ -697,6 +700,59 @@ class ChatEscrowApplicationTests {
 
         mockMvc.perform(post("/api/submissions/sub-fake-123/evaluate"))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("Syncing milestones requires mutually agreed contract and starts milestones in NOT_STARTED with no fabricated submissions")
+    void syncMilestonesRequiresAgreedContract() throws Exception {
+        Project project = projectService.createProject("Contract Sync Guard", "Desc", "Client", null, "Freelancer", null, new BigDecimal("500"), "USD");
+        projectService.createMilestone(project.getId(), "Pre-existing Milestone", new BigDecimal("500"), "2025-10-30", "D", "AC", "Desc", null);
+
+        // 1. Generate an unapproved draft
+        ContractVersion draft = contractService.generateDraftFromConversation(project.getId(), "Client: build site. Freelancer: $500.");
+        assertFalse(draft.isAgreed());
+
+        // Existing milestones must NOT be wiped by generating a draft
+        List<Milestone> currentMilestones = milestoneRepository.findByProjectIdOrderByCreatedAt(project.getId());
+        assertEquals(1, currentMilestones.size());
+        assertEquals("Pre-existing Milestone", currentMilestones.get(0).getTitle());
+
+        // 2. Calling sync-milestones before mutual approval must fail with 409 Conflict
+        String syncPayload = """
+                {
+                  "title": "New Title",
+                  "milestones": [
+                    {"title": "Unapproved Milestone 1", "amount": 250},
+                    {"title": "Unapproved Milestone 2", "amount": 250}
+                  ]
+                }
+                """;
+        mockMvc.perform(post("/api/projects/" + project.getId() + "/sync-milestones")
+                        .header("Authorization", "Bearer client-demo-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(syncPayload))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.status").value(409));
+
+        // 3. Mutually approve contract
+        contractService.approveVersion(draft.getId(), "client");
+        contractService.approveVersion(draft.getId(), "freelancer");
+
+        // 4. Calling sync-milestones now succeeds
+        mockMvc.perform(post("/api/projects/" + project.getId() + "/sync-milestones")
+                        .header("Authorization", "Bearer client-demo-token")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(syncPayload))
+                .andExpect(status().isOk());
+
+        // 5. Newly created milestones must be NOT_STARTED with zero submissions
+        List<Milestone> synced = milestoneRepository.findByProjectIdOrderByCreatedAt(project.getId());
+        assertEquals(2, synced.size());
+        for (Milestone m : synced) {
+            assertEquals(Milestone.MilestoneStatus.NOT_STARTED, m.getStatus());
+            List<Submission> subs = submissionRepository.findByMilestoneIdOrderByCreatedAtDesc(m.getId());
+            assertTrue(subs.isEmpty(), "Submissions must never be fabricated");
+        }
     }
 }
 
