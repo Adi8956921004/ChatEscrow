@@ -53,8 +53,8 @@ public class MilestoneService {
     public Submission submitEvidence(String milestoneId, String submittedBy,
                                       String description, String evidenceLinks, String fileRefs) {
         Milestone m = getMilestone(milestoneId);
-        if (m.getStatus() == Milestone.MilestoneStatus.ACCEPTED) {
-            throw new IllegalStateException("Cannot submit evidence for an already accepted milestone");
+        if (m.getStatus() == Milestone.MilestoneStatus.ACCEPTED || payoutRepo.findByMilestoneId(milestoneId).isPresent()) {
+            throw new IllegalStateException("Cannot submit evidence for an already accepted or released milestone");
         }
 
         Submission sub = Submission.builder()
@@ -366,6 +366,28 @@ public class MilestoneService {
         pack.put("auditTimeline", timeline);
         pack.put("generatedAt", Instant.now().toString());
         pack.put("disclaimer", "ChatEscrow Evidence Package: Assembled for transparency and human dispute resolution. Not legal advice.");
+
+        try {
+            String lastSubmissionDesc = submissions.isEmpty() ? "No formal submission yet" : submissions.get(0).getDescription();
+            AiService.DisputeMediationResult mediation = aiService.mediateDispute(
+                    m.getAcceptanceCriteria(),
+                    lastSubmissionDesc,
+                    m.getAmount(),
+                    "Dispute mediation and evidence review"
+            );
+            pack.put("advisoryMediation", Map.of(
+                    "summary", mediation.summary(),
+                    "clientAmount", mediation.clientAmount(),
+                    "freelancerAmount", mediation.freelancerAmount(),
+                    "isLive", mediation.isLive(),
+                    "modelName", mediation.modelName(),
+                    "isAdvisory", true,
+                    "disclaimer", "Advisory recommendation only. Humans make the final decision."
+            ));
+        } catch (Exception e) {
+            log.warn("Failed to generate advisory mediation for dispute pack: {}", e.getMessage());
+        }
+
         return pack;
     }
 }

@@ -402,6 +402,11 @@ public class PayPalService {
 
             JsonNode node = objectMapper.readTree(response);
             return node.has("id") ? node.get("id").asText() : captureId + "-refunded";
+        } catch (WebClientResponseException e) {
+            String errBody = e.getResponseBodyAsString();
+            int statusCode = e.getStatusCode().value();
+            log.error("PayPal capture refund HTTP {} for captureId={}: {}", statusCode, captureId, errBody);
+            throw new com.chatescrow.backend.exception.PayPalApiException(statusCode, errBody, e);
         } catch (Exception e) {
             log.error("PayPal capture refund failed for captureId {}", captureId, e);
             throw new RuntimeException("PayPal refund failed: " + e.getMessage(), e);

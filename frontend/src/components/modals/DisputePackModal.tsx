@@ -9,6 +9,13 @@ export function DisputePackModal({ data, onClose }: { data: Record<string, unkno
   const project = data.project as Project | undefined
   const submissions = (data.submissions as Submission[]) ?? []
   const auditTimeline = (data.auditTimeline as AuditEvent[]) ?? []
+  const advisoryMediation = data.advisoryMediation as {
+    summary?: string
+    clientAmount?: number
+    freelancerAmount?: number
+    isAdvisory?: boolean
+    disclaimer?: string
+  } | undefined
 
   const handleCopy = () => {
     navigator.clipboard.writeText(JSON.stringify(data, null, 2))
@@ -38,6 +45,32 @@ export function DisputePackModal({ data, onClose }: { data: Record<string, unkno
           <InfoBanner tone="blue">
             {String(data.disclaimer ?? "Assembled for transparency and neutral review.")}
           </InfoBanner>
+
+          {advisoryMediation && (
+            <div className="rounded-2xl border border-violet-200 bg-violet-50/50 p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-violet">
+                  <Icon name="spark" size="sm" />
+                  <span className="font-bold text-xs uppercase tracking-wider">AI Advisory Mediation Recommendation</span>
+                </div>
+                <Badge tone="purple">Advisory Only</Badge>
+              </div>
+              <p className="text-xs text-ink leading-relaxed">{advisoryMediation.summary}</p>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div className="rounded-xl border border-line bg-white p-2.5">
+                  <span className="text-muted block text-[0.7rem] uppercase">Client Recommended Split</span>
+                  <span className="font-extrabold text-ink text-sm">{formatMoney(advisoryMediation.clientAmount ?? 0)}</span>
+                </div>
+                <div className="rounded-xl border border-line bg-white p-2.5">
+                  <span className="text-muted block text-[0.7rem] uppercase">Freelancer Recommended Split</span>
+                  <span className="font-extrabold text-ink text-sm">{formatMoney(advisoryMediation.freelancerAmount ?? 0)}</span>
+                </div>
+              </div>
+              <p className="text-[0.68rem] text-muted italic">
+                {advisoryMediation.disclaimer ?? "This recommendation is strictly advisory. Humans make the final decision."}
+              </p>
+            </div>
+          )}
 
           <div className="rounded-xl border border-line p-4 space-y-2 bg-surface">
             <p className="font-bold text-ink">Project: {project?.title ?? "E-commerce Website Development"}</p>

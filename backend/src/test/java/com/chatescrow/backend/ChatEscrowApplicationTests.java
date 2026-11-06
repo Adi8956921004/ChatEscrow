@@ -657,6 +657,53 @@ class ChatEscrowApplicationTests {
     }
 
     @Test
+    @DisplayName("Real PayPal refund call failure leaves payment CAPTURED and propagates error")
+    void realPayPalRefundFailureLeavesPaymentCaptured() {
+        Project project = projectService.createProject("Real Refund Test", "Desc", "Client", null, "Freelancer", null, new BigDecimal("200"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "M-RealRefund", new BigDecimal("200"), "2025-10-30", "D", "AC", "Desc", null);
+
+        Payment payment = Payment.builder()
+                .projectId(project.getId())
+                .milestoneId(m.getId())
+                .amount(new BigDecimal("200"))
+                .currency("USD")
+                .provider("PAYPAL")
+                .providerOrderId("ORD-REAL-001")
+                .providerCaptureId("CAP-REAL-001")
+                .status(Payment.PaymentStatus.CAPTURED)
+                .build();
+        Payment savedPayment = paymentRepository.save(payment);
+
+        when(paypalService.isConfigured()).thenReturn(true);
+        when(paypalService.refundCapture(org.mockito.ArgumentMatchers.eq("CAP-REAL-001"), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any()))
+                .thenThrow(new PayPalApiException(422, "{\"name\":\"CAPTURE_FULLY_REFUNDED\"}"));
+
+        assertThrows(PayPalApiException.class, () -> {
+            paymentService.refundPayment(savedPayment.getId(), "Test failure");
+        });
+
+        Payment postFail = paymentRepository.findById(savedPayment.getId()).orElseThrow();
+        assertEquals(Payment.PaymentStatus.CAPTURED, postFail.getStatus(),
+                "Real payment must remain CAPTURED when PayPal refund fails");
+    }
+
+    @Test
+    @DisplayName("Dispute pack includes advisory mediation recommendation")
+    void disputePackIncludesAdvisoryMediation() {
+        Project project = projectService.createProject("Dispute Pack Test", "Desc", "Client", null, "Freelancer", null, new BigDecimal("300"), "USD");
+        Milestone m = projectService.createMilestone(project.getId(), "M-DisputePack", new BigDecimal("300"), "2025-10-30", "D", "Criteria A|Criteria B", "Desc", null);
+
+        Map<String, Object> pack = milestoneService.getDisputePack(m.getId());
+        assertNotNull(pack);
+        assertTrue(pack.containsKey("advisoryMediation"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> mediation = (Map<String, Object>) pack.get("advisoryMediation");
+        assertNotNull(mediation.get("clientAmount"));
+        assertNotNull(mediation.get("freelancerAmount"));
+        assertEquals(true, mediation.get("isAdvisory"));
+    }
+
+    @Test
     @DisplayName("Advisory dispute mediation produces splits that sum to exact milestone total")
     void disputeMediationProducesExactTotalSplit() {
         BigDecimal total = new BigDecimal("450.00");

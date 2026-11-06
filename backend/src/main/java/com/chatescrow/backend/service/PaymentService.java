@@ -419,13 +419,18 @@ public class PaymentService {
                 || payment.getProviderCaptureId().startsWith("DEMO_")
                 || payment.getProviderCaptureId().startsWith("sim-");
 
-        String refundId = "sim-refund-" + java.util.UUID.randomUUID().toString().substring(0, 8);
-        if (!isSimulated && paypalService.isConfigured() && payment.getProviderCaptureId() != null) {
-            try {
-                refundId = paypalService.refundCapture(payment.getProviderCaptureId(), payment.getAmount(), payment.getCurrency(), reason);
-            } catch (Exception e) {
-                log.warn("PayPal capture refund call failed, recording simulated refund: {}", e.getMessage());
+        String refundId;
+        if (isSimulated) {
+            refundId = "sim-refund-" + java.util.UUID.randomUUID().toString().substring(0, 8);
+        } else {
+            if (!paypalService.isConfigured()) {
+                throw new IllegalStateException("PayPal is not configured. Cannot process refund for real payment " + paymentId);
             }
+            if (payment.getProviderCaptureId() == null || payment.getProviderCaptureId().isBlank()) {
+                throw new IllegalStateException("Payment " + paymentId + " has no provider capture ID to refund");
+            }
+            // Propagate any PayPal API failure — do NOT mark payment REFUNDED if provider refused or failed!
+            refundId = paypalService.refundCapture(payment.getProviderCaptureId(), payment.getAmount(), payment.getCurrency(), reason);
         }
 
         payment.setStatus(Payment.PaymentStatus.REFUNDED);

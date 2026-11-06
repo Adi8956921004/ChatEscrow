@@ -47,7 +47,11 @@ public class AiService {
 
     public record ContractExtractionResult(String termsJson, boolean isLive, String modelName) {}
     public record AcceptanceEvaluationResult(String reportJson, boolean isLive, String modelName) {}
-    public record DisputeMediationResult(String mediationJson, boolean isLive, String modelName, BigDecimal clientAmount, BigDecimal freelancerAmount) {}
+    public record DisputeMediationResult(String mediationJson, boolean isLive, String modelName, BigDecimal clientAmount, BigDecimal freelancerAmount, String summary) {
+        public DisputeMediationResult(String mediationJson, boolean isLive, String modelName, BigDecimal clientAmount, BigDecimal freelancerAmount) {
+            this(mediationJson, isLive, modelName, clientAmount, freelancerAmount, "Advisory resolution recommendation");
+        }
+    }
 
     private volatile boolean lastCallLive = false;
 
@@ -252,22 +256,24 @@ public class AiService {
             if (clientAmount.compareTo(safeTotal) > 0) clientAmount = safeTotal;
             BigDecimal freelancerAmount = safeTotal.subtract(clientAmount);
 
+            String summary = node.has("summary") ? node.get("summary").asText() : "Advisory split based on milestone review";
             ((ObjectNode) node).put("clientAmount", clientAmount);
             ((ObjectNode) node).put("freelancerAmount", freelancerAmount);
             ((ObjectNode) node).put("isAdvisory", true);
 
-            return new DisputeMediationResult(node.toString(), true, getModel() + " (live)", clientAmount, freelancerAmount);
+            return new DisputeMediationResult(node.toString(), true, getModel() + " (live)", clientAmount, freelancerAmount, summary);
         } catch (Exception e) {
             log.warn("Gemini call failed for dispute mediation: {} – falling back to balanced split", e.getMessage());
             BigDecimal half = safeTotal.divide(BigDecimal.valueOf(2), 2, java.math.RoundingMode.HALF_UP);
             BigDecimal remainder = safeTotal.subtract(half);
+            String summary = "Advisory Mediation Recommendation (Fallback): 50/50 split.";
             ObjectNode fallbackNode = mapper.createObjectNode();
             fallbackNode.put("clientAmount", half);
             fallbackNode.put("freelancerAmount", remainder);
-            fallbackNode.put("summary", "Advisory Mediation Recommendation (Fallback): 50/50 split.");
+            fallbackNode.put("summary", summary);
             fallbackNode.put("reasoning", "Live AI service was temporarily unreachable.");
             fallbackNode.put("isAdvisory", true);
-            return new DisputeMediationResult(fallbackNode.toString(), false, "demo-mode (fallback)", half, remainder);
+            return new DisputeMediationResult(fallbackNode.toString(), false, "demo-mode (fallback)", half, remainder, summary);
         }
     }
 

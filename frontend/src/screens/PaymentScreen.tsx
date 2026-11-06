@@ -13,6 +13,7 @@ import {
   getActorRole,
 } from "../data"
 import { Icon, Button, Heading, Badge, Card, Field, InfoBanner, StatCard } from "../components/ui"
+import { RefundModal } from "../components/modals"
 
 export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s: Screen) => void; projectId: string }) {
   const activeRole = getActorRole()
@@ -29,6 +30,7 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
   const [orderResult, setOrderResult] = useState<Record<string, unknown> | null>(null)
   const [captureResult, setCaptureResult] = useState<Record<string, unknown> | null>(null)
   const [demoDepositSuccess, setDemoDepositSuccess] = useState<string | null>(null)
+  const [refundingPayment, setRefundingPayment] = useState<Payment | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const reloadData = () => {
@@ -440,11 +442,32 @@ export function PaymentScreen({ navigate: _navigate, projectId }: { navigate: (s
                     Re-check
                   </Button>
                 )}
+                {isClient && p.status === "CAPTURED" && (
+                  <Button
+                    variant="ghost"
+                    icon="warning"
+                    onClick={() => setRefundingPayment(p)}
+                    className="text-xs py-1 px-2.5 text-danger hover:bg-danger-soft border border-danger/25"
+                  >
+                    Refund
+                  </Button>
+                )}
               </div>
             </div>
           ))}
         </div>
       </Card>
+
+      {refundingPayment && (
+        <RefundModal
+          payment={refundingPayment}
+          onClose={() => setRefundingPayment(null)}
+          onSuccess={(refunded) => {
+            setPayments((prev) => prev.map((item) => item.id === refunded.id ? refunded : item))
+            reloadData()
+          }}
+        />
+      )}
     </div>
   )
 }

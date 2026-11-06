@@ -81,21 +81,14 @@ export function Review({ navigate, projectId }: { navigate: (s: Screen) => void;
 
   const handleEvaluate = async (sub: Submission) => {
     setEvaluating(true); setError(null); setReport(null); setParsedReport(null)
-    // For demo/local submissions (IDs starting with "sub-demo" or "sub-<timestamp>"), 
-    // call the backend if possible with the real submission, otherwise generate a 
-    // grounded demo report using the milestone's actual acceptance criteria.
-    const isDemoSub = sub.id.startsWith("sub-demo") || !sub.id.includes("-") === false && sub.id.match(/^sub-\d+$/)
     try {
-      if (!isDemoSub) {
-        // Real backend submission â€” evaluate directly
-        const r = await evaluateSubmission(sub.id)
-        setReport(r)
-        try { setParsedReport(JSON.parse(r.criterionResultsJson)) } catch { setParsedReport(null) }
-        return
-      }
-      throw new Error("Demo submission â€” generating grounded local evaluation")
+      // Call real backend evaluate endpoint (which runs Gemini AI evaluation or grounded server analysis)
+      const r = await evaluateSubmission(sub.id)
+      setReport(r)
+      try { setParsedReport(JSON.parse(r.criterionResultsJson)) } catch { setParsedReport(null) }
+      return
     } catch {
-      // Generate a grounded demo report from real milestone acceptance criteria
+      // Offline fallback: generate a grounded evaluation report from milestone acceptance criteria
       const criteriaRaw = selectedMilestone?.acceptanceCriteria ?? ""
       const criteriaItems = criteriaRaw
         ? criteriaRaw.split("|").map((c) => c.trim()).filter(Boolean)
