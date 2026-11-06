@@ -5,7 +5,9 @@
 // Falls back to localhost:8080 if not set.
 // ============================================================
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? "http://localhost:8080"
+const API_BASE = import.meta.env.VITE_API_BASE_URL !== undefined
+  ? (import.meta.env.VITE_API_BASE_URL as string)
+  : (import.meta.env.DEV ? "http://localhost:8080" : "")
 
 let currentActorRole: "client" | "freelancer" = "client"
 

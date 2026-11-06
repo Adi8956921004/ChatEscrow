@@ -172,3 +172,76 @@ To run the automated end-to-end browser test with real unseen data:
 cd frontend
 node test_browser_flow.mjs
 ```
+
+
+---
+
+## 10. Deployment Guide
+
+ChatEscrow is production-ready and can be deployed with Docker, Docker Compose, or modern cloud platforms.
+
+### Option A: 1-Command Docker Compose (Recommended)
+
+The included [docker-compose.yml](file:///docker-compose.yml) coordinates the Spring Boot backend and Nginx-powered frontend with built-in Actuator healthchecks.
+
+```bash
+# 1. Copy environment template
+cp .env.example .env
+
+# 2. Add your PayPal Sandbox & Gemini API credentials in .env
+
+# 3. Start containers
+docker compose up --build -d
+```
+
+- **Frontend & App:** Open `http://localhost:5173` (served via Nginx SPA with API reverse-proxy)
+- **Backend API & Actuator Health:** `http://localhost:8080/actuator/health`
+
+#### Optional: Persistent PostgreSQL Database
+
+To run with persistent PostgreSQL instead of in-memory H2:
+
+```bash
+docker compose --profile postgres up --build -d
+```
+
+---
+
+### Option B: Cloud Platforms (Railway, Render, Fly.io)
+
+ChatEscrow provides separate Dockerfiles for both services:
+
+1. **Backend Service (`backend/Dockerfile`):**
+   - **Build:** Multi-stage Eclipse Temurin JDK 17 & Alpine runtime
+   - **Port:** `8080`
+   - **Healthcheck:** `GET /actuator/health`
+   - **Environment Variables:**
+     - `SERVER_PORT=8080`
+     - `APP_BASE_URL=https://your-frontend-domain.com`
+     - `CHATESCROW_CORS_ALLOWED_ORIGINS=https://your-frontend-domain.com`
+     - `PAYPAL_CLIENT_ID` & `PAYPAL_CLIENT_SECRET`
+     - `AI_API_KEY` (Gemini API key)
+     - `SPRING_DATASOURCE_URL` (optional: connect to managed PostgreSQL)
+
+2. **Frontend Service (`frontend/Dockerfile`):**
+   - **Build:** Multi-stage Node 20 build with Nginx Alpine runtime
+   - **Port:** `80` (or cloud-assigned port)
+   - **Environment Variables:**
+     - `VITE_API_BASE_URL=https://your-backend-domain.com` (leave blank if proxied via Nginx)
+
+---
+
+### Option C: Manual Production Build
+
+```bash
+# Backend JAR build
+cd backend
+mvn clean package -DskipTests
+java -jar target/chatescrow-backend-0.0.1-SNAPSHOT.jar
+
+# Frontend static build
+cd ../frontend
+npm ci
+npm run build
+# The resulting /dist directory is ready to serve with any static web server (Nginx, Caddy, Vercel, Netlify)
+```

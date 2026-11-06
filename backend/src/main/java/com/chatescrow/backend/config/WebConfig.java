@@ -25,8 +25,15 @@ public class WebConfig {
     public CorsFilter corsFilter() {
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         CorsConfiguration config = new CorsConfiguration();
-        List<String> origins = Arrays.asList(allowedOriginsStr.split(","));
-        config.setAllowedOrigins(origins);
+        List<String> origins = Arrays.stream(allowedOriginsStr.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+        if (origins.contains("*")) {
+            config.addAllowedOriginPattern("*");
+        } else {
+            config.setAllowedOrigins(origins);
+        }
         config.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(Arrays.asList("Authorization", "Content-Type", "X-Actor-Role", "X-Actor-Id", "PayPal-Request-Id"));
         config.setAllowCredentials(false);
